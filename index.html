@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111b21">
+  <meta name="description" content="Private group chats with yourself.">
+  <title>SelfChat</title>
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="styles.css?v=2">
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" aria-label="Your chats">
+      <header class="sidebar-header">
+        <div class="profile-mark" aria-hidden="true">S</div>
+        <div class="brand">
+          <strong>SelfChat</strong>
+          <span>only you live here</span>
+        </div>
+        <button class="icon-button" id="newChatButton" type="button" aria-label="Create a new chat" title="New chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button class="icon-button" id="settingsButton" type="button" aria-label="Open settings" title="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </header>
+
+      <div class="chat-filter">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="chatFilterInput" type="search" placeholder="Search chats" autocomplete="off">
+      </div>
+
+      <nav class="chat-list" id="chatList"></nav>
+      <div class="sidebar-foot"><span></span>Stored only on this computer</div>
+    </aside>
+
+    <main class="conversation">
+      <header class="conversation-header">
+        <div class="chat-avatar" id="activeChatAvatar">🏀</div>
+        <div class="conversation-title">
+          <strong id="activeChatName">NBA</strong>
+          <span>you</span>
+        </div>
+        <button class="icon-button" id="messageSearchButton" type="button" aria-label="Search this chat" title="Search this chat">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        </button>
+        <button class="icon-button" id="chatMenuButton" type="button" aria-label="Chat options" title="Chat options">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+      </header>
+
+      <div class="message-search" id="messageSearchPanel" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        <input id="messageSearchInput" type="search" placeholder="Search messages in this chat" autocomplete="off">
+        <span id="searchResultCount"></span>
+        <button id="closeMessageSearch" type="button" aria-label="Close search">×</button>
+      </div>
+
+      <section class="message-stage" id="messageStage" aria-label="Messages">
+        <div class="empty-state" id="emptyState">
+          <div class="empty-avatar" id="emptyAvatar">🏀</div>
+          <h1 id="emptyTitle">NBA</h1>
+          <p>This group has one member. Unfortunately, he has takes.</p>
+          <span>Send the first message</span>
+        </div>
+        <div class="message-list" id="messageList" aria-live="polite"></div>
+      </section>
+
+      <form class="composer" id="composer">
+        <textarea id="messageInput" rows="1" maxlength="20000" placeholder="Type a message" aria-label="Type a message"></textarea>
+        <button class="send-button" id="sendButton" type="submit" aria-label="Send message" disabled>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 17-8-8 17-1-7-8-2Z"/><path d="m11 13 9-10"/></svg>
+        </button>
+      </form>
+      <div class="keyboard-hint">Enter to send · Shift + Enter for a new line</div>
+    </main>
+  </div>
+
+  <dialog id="chatDialog">
+    <form class="dialog-card" id="chatForm">
+      <div class="dialog-label">NEW SELF-CHAT</div>
+      <h2>What are we talking about?</h2>
+      <label for="chatNameInput">Chat name</label>
+      <input id="chatNameInput" maxlength="48" placeholder="Movies, work, existential dread…" required>
+      <fieldset>
+        <legend>Pick an icon</legend>
+        <div class="emoji-picker" id="emojiPicker"></div>
+      </fieldset>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelChatButton" type="button">Cancel</button>
+        <button class="button primary" type="submit">Create chat</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="chatOptionsDialog">
+    <div class="dialog-card compact">
+      <div class="dialog-label">CHAT OPTIONS</div>
+      <h2 id="optionsChatName">NBA</h2>
+      <button class="option-row" id="renameChatButton" type="button"><span>Rename chat</span><b>→</b></button>
+      <button class="option-row danger" id="deleteChatButton" type="button"><span>Delete chat and messages</span><b>×</b></button>
+      <button class="button secondary full" id="closeOptionsButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog">
+    <div class="dialog-card compact">
+      <div class="dialog-label">YOUR DATA</div>
+      <h2>Local by default.</h2>
+      <p class="dialog-copy">Everything lives in this browser on this computer. Export a backup occasionally so a browser reset cannot erase your rambling legacy.</p>
+      <button class="option-row" id="exportButton" type="button"><span>Export backup</span><b>↓</b></button>
+      <label class="option-row file-row" for="importInput"><span>Import backup</span><b>↑</b></label>
+      <input id="importInput" type="file" accept="application/json" hidden>
+      <button class="button secondary full" id="closeSettingsButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="editMessageDialog">
+    <form class="dialog-card" id="editMessageForm">
+      <div class="dialog-label">EDIT MESSAGE</div>
+      <h2>Revise the take.</h2>
+      <textarea id="editMessageInput" rows="6" maxlength="20000"></textarea>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelEditButton" type="button">Cancel</button>
+        <button class="button primary" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="context-menu" id="messageContextMenu" hidden>
+    <button type="button" data-action="copy">Copy</button>
+    <button type="button" data-action="edit">Edit</button>
+    <button class="danger" type="button" data-action="delete">Delete</button>
+  </div>
+  <div class="toast" id="toast" role="status"></div>
+  <script src="app.js?v=2"></script>
+</body>
+</html>
