@@ -6,9 +6,9 @@
   <meta name="theme-color" content="#111b21">
   <meta name="description" content="Private group chats with yourself.">
   <title>SelfChat</title>
-  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=2">
+  <link rel="stylesheet" href="styles.css?v=18">
 </head>
 <body>
   <div class="app" id="app">
@@ -29,11 +29,14 @@
 
       <div class="chat-filter">
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-        <input id="chatFilterInput" type="search" placeholder="Search chats" autocomplete="off">
+        <input id="chatFilterInput" type="search" placeholder="Search chats and messages" autocomplete="off">
       </div>
 
       <nav class="chat-list" id="chatList"></nav>
-      <div class="sidebar-foot"><span></span>Stored only on this computer</div>
+      <div class="sidebar-foot">
+        <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only on this computer</span>
+        <span class="app-version" title="SelfChat version">v0.9.2</span>
+      </div>
     </aside>
 
     <main class="conversation">
@@ -55,7 +58,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
         <input id="messageSearchInput" type="search" placeholder="Search messages in this chat" autocomplete="off">
         <span id="searchResultCount"></span>
+        <button class="search-nav" id="previousSearchResult" type="button" aria-label="Previous search result" title="Previous result">↑</button>
+        <button class="search-nav" id="nextSearchResult" type="button" aria-label="Next search result" title="Next result">↓</button>
         <button id="closeMessageSearch" type="button" aria-label="Close search">×</button>
+      </div>
+
+      <div class="selection-bar" id="selectionBar" hidden>
+        <strong id="selectionCount">1 selected</strong>
+        <span></span>
+        <button id="moveSelectedButton" type="button">Move</button>
+        <button class="danger" id="deleteSelectedButton" type="button">Delete</button>
+        <button id="cancelSelectionButton" type="button">Cancel</button>
       </div>
 
       <section class="message-stage" id="messageStage" aria-label="Messages">
@@ -68,14 +81,51 @@
         <div class="message-list" id="messageList" aria-live="polite"></div>
       </section>
 
+      <div class="sticker-panel" id="stickerPanel" hidden>
+        <div class="sticker-panel-header">
+          <strong>Stickers</strong>
+          <button class="sticker-create-button" id="createStickerButton" type="button">+ Create</button>
+        </div>
+        <div class="sticker-grid" id="stickerGrid" role="group" aria-label="Stickers"></div>
+      </div>
+
       <form class="composer" id="composer">
+        <div class="image-preview-tray" id="imagePreviewTray" hidden>
+          <div class="image-preview-header">
+            <strong id="imagePreviewTitle">Image ready to send</strong>
+            <button id="clearImagePreviews" type="button">Remove all</button>
+          </div>
+          <div class="image-preview-list" id="imagePreviewList" aria-live="polite"></div>
+        </div>
+        <button class="composer-tool" id="imageButton" type="button" aria-label="Add images" title="Add images">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 5-5 4 4 2-2 5 5"/></svg>
+        </button>
+        <input id="imageInput" type="file" accept="image/*" multiple hidden>
+        <button class="composer-tool" id="stickerButton" type="button" aria-label="Choose a sticker" aria-expanded="false" aria-controls="stickerPanel" title="Stickers">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h10a4 4 0 0 1 4 4v7l-7 7H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z"/><path d="M12 21v-5a2 2 0 0 1 2-2h5"/><path d="M8 9h.01M14 9h.01M8 13c1.1 1 2.43 1.5 4 1.5"/></svg>
+        </button>
         <textarea id="messageInput" rows="1" maxlength="20000" placeholder="Type a message" aria-label="Type a message"></textarea>
         <button class="send-button" id="sendButton" type="submit" aria-label="Send message" disabled>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 17-8-8 17-1-7-8-2Z"/><path d="m11 13 9-10"/></svg>
         </button>
       </form>
-      <div class="keyboard-hint">Enter to send · Shift + Enter for a new line</div>
+      <div class="keyboard-hint">Paste, drop, or choose images · Enter to send</div>
     </main>
+  </div>
+
+  <section class="single-tab-screen" id="singleTabScreen" role="dialog" aria-modal="true" aria-labelledby="singleTabMessage" hidden>
+    <div class="single-tab-card">
+      <p id="singleTabMessage">SelfChat is open in another tab. Click “Use this tab” to use SelfChat here.</p>
+      <p class="single-tab-hint" id="singleTabHint" aria-live="polite"></p>
+      <div class="single-tab-actions">
+        <button class="single-tab-close" id="closeThisTabButton" type="button">Close tab</button>
+        <button class="single-tab-use" id="useThisTabButton" type="button">Use this tab</button>
+      </div>
+    </div>
+  </section>
+
+  <div class="drop-overlay" id="dropOverlay" hidden>
+    <div><strong>Drop images here</strong><span>They stay on this computer</span></div>
   </div>
 
   <dialog id="chatDialog">
@@ -113,7 +163,41 @@
       <button class="option-row" id="exportButton" type="button"><span>Export backup</span><b>↓</b></button>
       <label class="option-row file-row" for="importInput"><span>Import backup</span><b>↑</b></label>
       <input id="importInput" type="file" accept="application/json" hidden>
+      <button class="option-row" id="openTrashButton" type="button"><span>Trash</span><b id="trashCount">0</b></button>
+      <div class="recovery-section">
+        <div class="dialog-label">AUTOMATIC RECOVERY</div>
+        <p id="recoveryStatus">Loading recovery points…</p>
+        <div class="recovery-list" id="recoveryList"></div>
+      </div>
+      <div class="storage-diagnostics" id="storageDiagnostics" aria-live="polite">Checking local storage…</div>
       <button class="button secondary full" id="closeSettingsButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="moveMessagesDialog">
+    <form class="dialog-card" id="moveMessagesForm">
+      <div class="dialog-label">MOVE MESSAGES</div>
+      <h2 id="moveMessagesTitle">Move message</h2>
+      <label for="moveDestinationSelect">Move to</label>
+      <select id="moveDestinationSelect"></select>
+      <p class="dialog-copy">Messages keep their original dates and IDs.</p>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelMoveButton" type="button">Cancel</button>
+        <button class="button primary" type="submit">Move</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="trashDialog" class="wide-dialog">
+    <div class="dialog-card compact">
+      <div class="dialog-label">YOUR DATA</div>
+      <h2>Trash</h2>
+      <p class="dialog-copy">Deleted chats and messages stay here until you restore or permanently delete them.</p>
+      <div class="trash-list" id="trashList"></div>
+      <div class="dialog-actions split-actions">
+        <button class="button danger-button" id="emptyTrashButton" type="button">Empty Trash</button>
+        <button class="button secondary" id="closeTrashButton" type="button">Done</button>
+      </div>
     </div>
   </dialog>
 
@@ -129,12 +213,73 @@
     </form>
   </dialog>
 
+  <dialog id="recoveryPreviewDialog">
+    <div class="dialog-card compact">
+      <div class="dialog-label">RECOVERY PREVIEW</div>
+      <h2>Restore this point in time?</h2>
+      <p class="dialog-copy" id="recoveryPreviewSummary"></p>
+      <p class="dialog-warning">Your current state will be saved as a new recovery point first. This restore replaces the current local projection; it does not affect exported backup files.</p>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelRecoveryButton" type="button">Cancel</button>
+        <button class="button primary" id="confirmRecoveryButton" type="button">Restore</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="stickerDialog">
+    <form class="dialog-card" id="stickerForm">
+      <div class="dialog-label">CREATE STICKER</div>
+      <h2>Turn an image into a sticker.</h2>
+      <div class="sticker-image-builder">
+        <button class="sticker-image-dropzone" id="stickerImageDropzone" type="button">
+          <span class="sticker-image-placeholder" id="stickerImagePlaceholder">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5"/></svg>
+            <strong>Choose an image</strong>
+            <small>or paste / drop one here</small>
+          </span>
+          <img id="stickerImagePreview" alt="Sticker preview" hidden>
+          <span class="sticker-image-change" id="stickerImageChange" hidden>Change image</span>
+        </button>
+        <div class="sticker-image-fields">
+          <label for="stickerNameInput">Sticker name</label>
+          <input id="stickerNameInput" maxlength="40" placeholder="Neymar at the corner" autocomplete="off">
+          <p>Images stay in this browser. Transparent PNG or WebP files look most like classic WhatsApp stickers, but any image works.</p>
+        </div>
+      </div>
+      <input id="stickerImageInput" type="file" accept="image/*" hidden>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelStickerButton" type="button">Cancel</button>
+        <button class="button primary" id="saveStickerButton" type="submit" disabled>Save sticker</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="image-viewer" id="imageViewerDialog" aria-label="Image viewer">
+    <div class="image-viewer-header">
+      <div>
+        <strong id="imageViewerTitle">Image</strong>
+        <span id="imageViewerTime"></span>
+      </div>
+      <button id="closeImageViewer" type="button" aria-label="Close image viewer" title="Close">×</button>
+    </div>
+    <div class="image-viewer-stage">
+      <button class="image-viewer-nav previous" id="previousViewerImage" type="button" aria-label="Previous image" title="Previous image">‹</button>
+      <img id="imageViewerImage" alt="">
+      <button class="image-viewer-nav next" id="nextViewerImage" type="button" aria-label="Next image" title="Next image">›</button>
+    </div>
+    <div class="image-viewer-caption" id="imageViewerCaption" hidden></div>
+  </dialog>
+
   <div class="context-menu" id="messageContextMenu" hidden>
     <button type="button" data-action="copy">Copy</button>
     <button type="button" data-action="edit">Edit</button>
+    <button type="button" data-action="select">Select</button>
+    <button type="button" data-action="move">Move</button>
     <button class="danger" type="button" data-action="delete">Delete</button>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="app.js?v=2"></script>
+  <script src="storage-core.js?v=5"></script>
+  <script src="storage.js?v=5"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>

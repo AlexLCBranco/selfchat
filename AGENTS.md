@@ -14,6 +14,7 @@ Before changing the project, read `README.md` and `DECISIONS.md`. Treat the live
 - Keep the product desktop-first until the user explicitly changes that priority.
 - Do not add AI responses, accounts, cloud sync, analytics, attachments, or notifications without an explicit request.
 - Prefer small improvements driven by observed use over speculative feature expansion.
+- WhatsApp Desktop is the interaction baseline for familiar chat behaviors. When adding or changing messages, media, composer actions, search, menus, or keyboard flows, implement the ordinary expected interaction—not only a visual resemblance—and proactively check adjacent basic affordances before handoff.
 
 ## Technical shape
 
@@ -35,6 +36,14 @@ node --check server.js
 ```
 
 For behavior changes, run `node server.js`, exercise the changed flow in a browser, check persistence after reload when relevant, and inspect browser errors. Report only checks that actually ran.
+
+Before handing off a familiar WhatsApp-like interaction, perform a brief parity pass for obvious click, keyboard, close/cancel, preview, and reload behavior so the user does not have to identify basic usability omissions.
+
+## Reporting
+
+- Include the current visible SelfChat version in every implementation or verification report to the user.
+- Read the version from the live source rather than relying on prior chat memory.
+- After every application change, include a clickable link to the deployed SelfChat version. Clearly say when a change has not been deployed yet; do not present the production link as containing an undeployed build.
 
 ## Context maintenance
 
