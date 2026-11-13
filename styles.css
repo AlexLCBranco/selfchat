@@ -92,6 +92,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .chat-avatar { width: 42px; height: 42px; background: #34454e; font-size: 21px; }
 .conversation-title { min-width: 0; display: grid; margin-right: auto; }
 .conversation-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 500; }
+.conversation-title input { width: min(360px, 42vw); padding: 4px 7px; border: 1px solid var(--accent); border-radius: 5px; outline: 0; color: var(--text); background: var(--input); font: inherit; font-weight: 600; }
 .conversation-title span { margin-top: 3px; color: var(--muted); font-size: 11px; }
 .message-search { display: grid; grid-template-columns: auto 1fr auto auto auto auto; align-items: center; gap: 7px; padding: 9px 18px; border-bottom: 1px solid var(--border); background: #182229; }
 .message-search span { color: var(--muted); font-size: 11px; }
@@ -303,6 +304,13 @@ dialog::backdrop { background: rgba(0,0,0,.68); backdrop-filter: blur(3px); }
 .message.selected { outline: 2px solid var(--accent); outline-offset: 3px; }
 .message.search-match-active { outline: 2px solid #ffe36d; outline-offset: 3px; }
 .message.flash-target { animation: target-flash 1.6s ease-out; }
+.message.inline-editing { width: min(760px, 78%); }
+.message.inline-editing > :not(.inline-message-edit) { display: none; }
+.inline-message-edit { display: grid; gap: 7px; min-width: min(520px, 54vw); }
+.inline-message-edit textarea { width: 100%; min-height: 70px; padding: 9px 10px; resize: vertical; border: 1px solid var(--accent); border-radius: 7px; outline: 0; color: var(--text); background: #111b21; font: inherit; line-height: 1.4; }
+.inline-message-edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.inline-message-edit-actions button { padding: 5px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: #182229; cursor: pointer; font-size: 10px; }
+.inline-message-edit-actions button[type="submit"] { border-color: var(--accent); color: var(--accent); }
 .message-link { color: #8fd8ff; text-decoration: underline; text-underline-offset: 2px; }
 .message-link:hover { color: white; }
 @keyframes target-flash { 0%, 35% { box-shadow: 0 0 0 5px rgba(255,227,109,.45); } 100% { box-shadow: 0 1px 1px var(--shadow); } }
@@ -316,6 +324,8 @@ dialog::backdrop { background: rgba(0,0,0,.68); backdrop-filter: blur(3px); }
 .context-menu button.danger { color: var(--danger); }
 .toast { position: fixed; left: 50%; bottom: 86px; z-index: 30; transform: translate(-50%, 10px); padding: 9px 13px; border: 1px solid var(--border); border-radius: 7px; opacity: 0; pointer-events: none; color: var(--text); background: #202c33; box-shadow: 0 5px 25px #000; font-size: 11px; transition: .18s; }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
+.toast.with-action { display: flex; align-items: center; gap: 14px; pointer-events: auto; }
+.toast button { padding: 0; border: 0; color: var(--accent); background: transparent; cursor: pointer; font: inherit; font-weight: 700; text-transform: uppercase; }
 
 @media (max-width: 1050px) {
   .app { grid-template-columns: 330px 1fr; }

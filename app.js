@@ -42,7 +42,7 @@ const $ = selector => document.querySelector(selector);
 const elements = {
   app: $("#app"), singleTabScreen: $("#singleTabScreen"), singleTabHint: $("#singleTabHint"),
   closeThisTabButton: $("#closeThisTabButton"), useThisTabButton: $("#useThisTabButton"),
-  chatList: $("#chatList"), activeChatAvatar: $("#activeChatAvatar"), activeChatName: $("#activeChatName"),
+  chatList: $("#chatList"), activeChatAvatar: $("#activeChatAvatar"), activeChatName: $("#activeChatName"), activeChatNameInput: $("#activeChatNameInput"),
   emptyAvatar: $("#emptyAvatar"), emptyTitle: $("#emptyTitle"), emptyState: $("#emptyState"), messageList: $("#messageList"),
   messageStage: $("#messageStage"), composer: $("#composer"), messageInput: $("#messageInput"), sendButton: $("#sendButton"),
   imageButton: $("#imageButton"), imageInput: $("#imageInput"), dropOverlay: $("#dropOverlay"),
@@ -57,8 +57,7 @@ const elements = {
   selectionBar: $("#selectionBar"), selectionCount: $("#selectionCount"),
   chatDialog: $("#chatDialog"), chatForm: $("#chatForm"), chatNameInput: $("#chatNameInput"),
   emojiPicker: $("#emojiPicker"), optionsDialog: $("#chatOptionsDialog"), optionsChatName: $("#optionsChatName"),
-  settingsDialog: $("#settingsDialog"), editDialog: $("#editMessageDialog"), editForm: $("#editMessageForm"),
-  editMessageInput: $("#editMessageInput"), contextMenu: $("#messageContextMenu"), toast: $("#toast"), importInput: $("#importInput"),
+  settingsDialog: $("#settingsDialog"), contextMenu: $("#messageContextMenu"), toast: $("#toast"), importInput: $("#importInput"),
   recoveryList: $("#recoveryList"), recoveryStatus: $("#recoveryStatus"),
   storageDiagnostics: $("#storageDiagnostics"), recoveryPreviewDialog: $("#recoveryPreviewDialog"), recoveryPreviewSummary: $("#recoveryPreviewSummary"),
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
@@ -66,7 +65,9 @@ const elements = {
   imageViewerDialog: $("#imageViewerDialog"), imageViewerImage: $("#imageViewerImage"), imageViewerTitle: $("#imageViewerTitle"),
   imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption"),
   originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
-  exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton")
+  exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton"),
+  confirmationDialog: $("#confirmationDialog"), confirmationForm: $("#confirmationForm"), confirmationTitle: $("#confirmationTitle"),
+  confirmationMessage: $("#confirmationMessage"), confirmActionButton: $("#confirmActionButton")
 };
 
 let state = loadLegacyState();
@@ -76,10 +77,9 @@ let storageMode = "legacy";
 let draftSaveTimer = null;
 let selectedEmoji = EMOJIS[0];
 let contextMessageId = null;
-let editingMessageId = null;
 let selectedMessageIds = new Set();
 let imageRenderToken = 0;
-let imageObjectUrls = [];
+const imageUrlCache = new Map();
 let stickerGridObjectUrls = [];
 let pendingImages = [];
 let pendingStickerImage = null;
@@ -98,6 +98,9 @@ let storagePersisted = null;
 let storageWarning = "";
 let automaticBackupTimer = null;
 let automaticBackupRunning = false;
+let confirmationResolver = null;
+let renamingChatId = null;
+let inlineEditingMessageId = null;
 
 function activeTabId() {
   try {
@@ -253,16 +256,17 @@ async function saveState({ significant = true, attachmentsPut = [], attachmentsD
   state = normalizeState(state);
   if (repository) {
     const before = structuredClone(persistedState);
-    const diff = stateDiff(before, state, attachmentsPut, attachmentsDelete);
+    const target = structuredClone(state);
+    const diff = stateDiff(before, target, attachmentsPut, attachmentsDelete);
     try {
-      if (diffHasContent(diff) || state.activeChatId !== persistedState.activeChatId) {
+      if (diffHasContent(diff) || target.activeChatId !== persistedState.activeChatId) {
         await repository.commit(diff, { significant, snapshotState: before });
       }
     } catch (error) {
       state = structuredClone(persistedState);
       throw error;
     }
-    persistedState = structuredClone(state);
+    persistedState = target;
   } else {
     const serialized = JSON.stringify(state);
     try { localStorage.setItem(RECOVERY_KEY, serialized); } catch (_) {}
@@ -611,10 +615,55 @@ function renderConversation() {
   renderMessages();
 }
 
-function renderMessages() {
+function messageArticleHtml(message, query = "", activeMatchId = null) {
+  const sticker = message.type === "sticker" ? stickerFor(message) : null;
+  const image = message.type === "image";
+  const stickerImage = sticker?.imageId;
+  const content = image
+    ? `<img class="message-media" data-image-id="${escapeHtml(message.imageId)}" alt="${escapeHtml(message.imageName || "Image")}" hidden><span class="image-fallback">Loading image…<small>${escapeHtml(message.imageName || "Image")}</small></span>${message.caption ? `<span class="image-caption">${query ? highlightMatch(message.caption, query) : escapeHtml(message.caption)}</span>` : ""}`
+    : stickerImage
+    ? `<img class="sticker-art sticker-image" data-image-id="${escapeHtml(sticker.imageId)}" alt="${escapeHtml(sticker.label)}" hidden><span class="sticker-image-fallback">Loading sticker…</span>`
+    : sticker
+    ? `<span class="sticker-art sticker-${sticker.tone}" role="img" aria-label="${escapeHtml(sticker.label)}"><span class="sticker-emoji">${escapeHtml(sticker.emoji)}</span>${sticker.caption ? `<span class="sticker-caption">${escapeHtml(sticker.caption)}</span>` : ""}</span>`
+    : `<span class="message-text">${renderLinkedText(message.text || "", query)}</span>`;
+  return `<article class="message${sticker ? " sticker-message" : image ? " image-message" : " text-message"}${message.editedAt ? " message-edited" : ""}${selectedMessageIds.size ? " selection-mode" : ""}${selectedMessageIds.has(message.id) ? " selected" : ""}${message.id === activeMatchId ? " search-match-active" : ""}${message.id === focusedMessageId ? " flash-target" : ""}" data-message-id="${escapeHtml(message.id)}" aria-selected="${selectedMessageIds.has(message.id)}">
+    <button class="message-menu-trigger" type="button" aria-label="Message options">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+    </button>
+    ${content}
+    <span class="message-meta">${message.editedAt ? "edited · " : ""}${formatTime(message.createdAt)}
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 13 4 4L16 7"/><path d="m9 16 2 2L22 7"/></svg>
+    </span>
+  </article>`;
+}
+
+function captureScrollAnchor() {
+  const stageRect = elements.messageStage.getBoundingClientRect();
+  const articles = [...elements.messageList.querySelectorAll("[data-message-id]")];
+  const anchor = articles.find(article => article.getBoundingClientRect().bottom > stageRect.top);
+  return {
+    id: anchor?.dataset.messageId || null,
+    offset: anchor ? anchor.getBoundingClientRect().top - stageRect.top : 0,
+    bottomDistance: elements.messageStage.scrollHeight - elements.messageStage.scrollTop - elements.messageStage.clientHeight,
+    wasAtBottom: elements.messageStage.scrollHeight - elements.messageStage.scrollTop - elements.messageStage.clientHeight < 4
+  };
+}
+
+function restoreScrollAnchor(anchor) {
+  if (!anchor) return;
+  if (anchor.wasAtBottom) return scrollToBottom();
+  const article = anchor.id && elements.messageList.querySelector(`[data-message-id="${CSS.escape(anchor.id)}"]`);
+  if (article) {
+    const stageTop = elements.messageStage.getBoundingClientRect().top;
+    elements.messageStage.scrollTop += article.getBoundingClientRect().top - stageTop - anchor.offset;
+  } else {
+    elements.messageStage.scrollTop = Math.max(0, elements.messageStage.scrollHeight - elements.messageStage.clientHeight - anchor.bottomDistance);
+  }
+}
+
+function renderMessages({ scroll = "bottom" } = {}) {
+  const savedAnchor = scroll === "preserve" ? captureScrollAnchor() : null;
   const renderToken = ++imageRenderToken;
-  imageObjectUrls.forEach(url => URL.revokeObjectURL(url));
-  imageObjectUrls = [];
   const query = elements.messageSearchInput.value.trim().toLocaleLowerCase();
   const allMessages = messagesFor();
   const visibleMessages = allMessages;
@@ -634,38 +683,21 @@ function renderMessages() {
     const date = formatDay(message.createdAt);
     const divider = date !== previousDate ? `<div class="day-divider">${date}</div>` : "";
     previousDate = date;
-    const sticker = message.type === "sticker" ? stickerFor(message) : null;
-    const image = message.type === "image";
-    const stickerImage = sticker?.imageId;
-    const content = image
-      ? `<img class="message-media" data-image-id="${escapeHtml(message.imageId)}" alt="${escapeHtml(message.imageName || "Image")}" hidden><span class="image-fallback">Loading image…<small>${escapeHtml(message.imageName || "Image")}</small></span>${message.caption ? `<span class="image-caption">${query ? highlightMatch(message.caption, query) : escapeHtml(message.caption)}</span>` : ""}`
-      : stickerImage
-      ? `<img class="sticker-art sticker-image" data-image-id="${escapeHtml(sticker.imageId)}" alt="${escapeHtml(sticker.label)}" hidden><span class="sticker-image-fallback">Loading sticker…</span>`
-      : sticker
-      ? `<span class="sticker-art sticker-${sticker.tone}" role="img" aria-label="${escapeHtml(sticker.label)}"><span class="sticker-emoji">${escapeHtml(sticker.emoji)}</span>${sticker.caption ? `<span class="sticker-caption">${escapeHtml(sticker.caption)}</span>` : ""}</span>`
-      : `<span class="message-text">${renderLinkedText(message.text || "", query)}</span>`;
-    return `${divider}<article class="message${sticker ? " sticker-message" : image ? " image-message" : " text-message"}${message.editedAt ? " message-edited" : ""}${selectedMessageIds.size ? " selection-mode" : ""}${selectedMessageIds.has(message.id) ? " selected" : ""}${message.id === activeMatchId ? " search-match-active" : ""}${message.id === focusedMessageId ? " flash-target" : ""}" data-message-id="${message.id}" aria-selected="${selectedMessageIds.has(message.id)}">
-      <button class="message-menu-trigger" type="button" aria-label="Message options">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
-      </button>
-      ${content}
-      <span class="message-meta">${message.editedAt ? "edited · " : ""}${formatTime(message.createdAt)}
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 13 4 4L16 7"/><path d="m9 16 2 2L22 7"/></svg>
-      </span>
-    </article>`;
+    return `${divider}${messageArticleHtml(message, query, activeMatchId)}`;
   }).join("");
 
-  hydrateImages(renderToken);
+  hydrateImages(renderToken, activeMatchId || focusedMessageId);
   if (activeMatchId) requestAnimationFrame(() => scrollMessageIntoView(activeMatchId));
   else if (focusedMessageId) requestAnimationFrame(() => {
     scrollMessageIntoView(focusedMessageId);
     setTimeout(() => { focusedMessageId = null; }, 1700);
   });
-  else if (!query) requestAnimationFrame(scrollToBottom);
+  else if (scroll === "bottom" && !query) requestAnimationFrame(scrollToBottom);
+  else if (savedAnchor) requestAnimationFrame(() => restoreScrollAnchor(savedAnchor));
 }
 
-function scrollMessageIntoView(messageId) {
-  elements.messageList.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center", behavior: "smooth" });
+function scrollMessageIntoView(messageId, behavior = "smooth") {
+  elements.messageList.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`)?.scrollIntoView({ block: "center", behavior });
 }
 
 function navigateSearch(direction) {
@@ -673,24 +705,29 @@ function navigateSearch(direction) {
   const matches = messagesFor().filter(message => messageLabel(message).toLocaleLowerCase().includes(query));
   if (!matches.length) return;
   messageSearchIndex = (messageSearchIndex + direction + matches.length) % matches.length;
-  renderMessages();
+  renderMessages({ scroll: "target" });
 }
 
-async function hydrateImages(renderToken) {
-  const images = [...elements.messageList.querySelectorAll("[data-image-id]")];
+async function hydrateImages(renderToken, anchoredMessageId = null, root = elements.messageList) {
+  const images = [...root.querySelectorAll("[data-image-id]:not([src])")];
   await Promise.all(images.map(async image => {
     try {
-      const record = await getImage(image.dataset.imageId);
+      const anchor = captureScrollAnchor();
+      let url = imageUrlCache.get(image.dataset.imageId);
+      const record = url ? null : await getImage(image.dataset.imageId);
       if (renderToken !== imageRenderToken || !image.isConnected) return;
-      if (!record?.blob) throw new Error("Image not found");
-      const url = URL.createObjectURL(record.blob);
-      imageObjectUrls.push(url);
+      if (!url) {
+        if (!record?.blob) throw new Error("Image not found");
+        url = URL.createObjectURL(record.blob);
+        imageUrlCache.set(image.dataset.imageId, url);
+      }
       image.addEventListener("load", () => {
         image.hidden = false;
         if (image.nextElementSibling) image.nextElementSibling.hidden = true;
-        scrollToBottom();
+        requestAnimationFrame(() => anchoredMessageId ? scrollMessageIntoView(anchoredMessageId, "auto") : restoreScrollAnchor(anchor));
       }, { once: true });
       image.addEventListener("error", () => {
+        imageUrlCache.delete(image.dataset.imageId);
         URL.revokeObjectURL(url);
         if (image.nextElementSibling) image.nextElementSibling.textContent = "This image cannot be displayed";
       }, { once: true });
@@ -699,6 +736,163 @@ async function hydrateImages(renderToken) {
       if (image.isConnected && image.nextElementSibling) image.nextElementSibling.textContent = "Image unavailable";
     }
   }));
+}
+
+function updateMessageListVisibility() {
+  const hasMessages = messagesFor().length > 0;
+  elements.emptyState.hidden = hasMessages;
+  elements.messageList.hidden = !hasMessages;
+}
+
+function refreshDayDividers() {
+  elements.messageList.querySelectorAll(".day-divider").forEach(divider => divider.remove());
+  let previousDate = "";
+  [...elements.messageList.querySelectorAll("[data-message-id]")].forEach(article => {
+    const message = state.messages.find(item => item.id === article.dataset.messageId);
+    if (!message) return;
+    const date = formatDay(message.createdAt);
+    if (date !== previousDate) article.insertAdjacentHTML("beforebegin", `<div class="day-divider">${escapeHtml(date)}</div>`);
+    previousDate = date;
+  });
+}
+
+function insertMessageElement(message, { scroll = false } = {}) {
+  if (message.chatId !== state.activeChatId || elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`)) return;
+  const ordered = messagesFor();
+  const next = ordered[ordered.findIndex(item => item.id === message.id) + 1];
+  const nextArticle = next && elements.messageList.querySelector(`[data-message-id="${CSS.escape(next.id)}"]`);
+  if (nextArticle) nextArticle.insertAdjacentHTML("beforebegin", messageArticleHtml(message));
+  else elements.messageList.insertAdjacentHTML("beforeend", messageArticleHtml(message));
+  refreshDayDividers();
+  updateMessageListVisibility();
+  const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
+  hydrateImages(imageRenderToken, null, article);
+  if (scroll) requestAnimationFrame(scrollToBottom);
+}
+
+function removeMessageElements(messageIds) {
+  messageIds.forEach(id => elements.messageList.querySelector(`[data-message-id="${CSS.escape(id)}"]`)?.remove());
+  refreshDayDividers();
+  updateMessageListVisibility();
+}
+
+function updateSelectionUi() {
+  elements.selectionBar.hidden = selectedMessageIds.size === 0;
+  elements.selectionCount.textContent = `${selectedMessageIds.size} selected`;
+  elements.messageList.querySelectorAll("[data-message-id]").forEach(article => {
+    const selected = selectedMessageIds.has(article.dataset.messageId);
+    article.classList.toggle("selection-mode", selectedMessageIds.size > 0);
+    article.classList.toggle("selected", selected);
+    article.setAttribute("aria-selected", String(selected));
+  });
+}
+
+function cancelInlineMessageEdit() {
+  if (!inlineEditingMessageId) return;
+  const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(inlineEditingMessageId)}"]`);
+  article?.querySelector(".inline-message-edit")?.remove();
+  article?.classList.remove("inline-editing");
+  inlineEditingMessageId = null;
+}
+
+function updateEditedMessageElement(message) {
+  const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
+  if (!article) return;
+  if (message.type === "image") {
+    let caption = article.querySelector(".image-caption");
+    if (message.caption && !caption) {
+      caption = document.createElement("span");
+      caption.className = "image-caption";
+      article.querySelector(".message-meta")?.before(caption);
+    }
+    if (caption) {
+      caption.textContent = message.caption || "";
+      caption.hidden = !message.caption;
+    }
+  } else {
+    const text = article.querySelector(".message-text");
+    if (text) text.innerHTML = renderLinkedText(message.text || "");
+  }
+  const meta = article.querySelector(".message-meta");
+  if (meta) meta.innerHTML = `edited · ${formatTime(message.createdAt)}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 13 4 4L16 7"/><path d="m9 16 2 2L22 7"/></svg>`;
+  article.classList.add("message-edited");
+}
+
+function startInlineMessageEdit(messageId) {
+  const message = state.messages.find(item => item.id === messageId);
+  const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+  if (!message || !article || message.type === "sticker") return;
+  cancelInlineMessageEdit();
+  const anchor = captureScrollAnchor();
+  inlineEditingMessageId = messageId;
+  article.classList.add("inline-editing");
+  const form = document.createElement("form");
+  form.className = "inline-message-edit";
+  form.innerHTML = `<textarea maxlength="20000" aria-label="Edit message"></textarea><div class="inline-message-edit-actions"><button type="button">Cancel</button><button type="submit">Save</button></div>`;
+  const input = form.querySelector("textarea");
+  input.value = message.type === "image" ? message.caption || "" : message.text || "";
+  form.querySelector('button[type="button"]').addEventListener("click", cancelInlineMessageEdit);
+  input.addEventListener("keydown", event => {
+    if (event.key === "Escape") { event.preventDefault(); cancelInlineMessageEdit(); }
+    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) { event.preventDefault(); form.requestSubmit(); }
+  });
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text && message.type !== "image") return;
+    const previous = structuredClone(message);
+    message.editHistory = [...(message.editHistory || []), { text: message.type === "image" ? message.caption || "" : message.text, editedAt: message.editedAt || message.createdAt }];
+    if (message.type === "image") message.caption = text;
+    else message.text = text;
+    message.editedAt = new Date().toISOString();
+    try {
+      await saveState();
+      updateEditedMessageElement(message);
+      cancelInlineMessageEdit();
+      renderChats();
+      restoreScrollAnchor(anchor);
+    } catch (_) {
+      Object.assign(message, previous);
+      showToast("Edit could not be saved", 5000);
+    }
+  });
+  article.append(form);
+  requestAnimationFrame(() => { restoreScrollAnchor(anchor); input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
+}
+
+function startInlineChatRename() {
+  const chat = activeChat();
+  if (!chat || chat.id === "unsorted") return showToast("Unsorted is permanent");
+  renamingChatId = chat.id;
+  elements.activeChatName.hidden = true;
+  elements.activeChatNameInput.hidden = false;
+  elements.activeChatNameInput.value = chat.name;
+  elements.optionsDialog.close();
+  elements.activeChatNameInput.focus();
+  elements.activeChatNameInput.select();
+}
+
+async function finishInlineChatRename(cancel = false) {
+  if (!renamingChatId) return;
+  const chat = state.chats.find(item => item.id === renamingChatId);
+  const nextName = elements.activeChatNameInput.value.trim().slice(0, 48);
+  renamingChatId = null;
+  elements.activeChatNameInput.hidden = true;
+  elements.activeChatName.hidden = false;
+  if (cancel || !chat || !nextName || nextName === chat.name) return;
+  const previousName = chat.name;
+  chat.name = nextName;
+  chat.updatedAt = new Date().toISOString();
+  try {
+    await saveState();
+    elements.activeChatName.textContent = chat.name;
+    elements.emptyTitle.textContent = chat.name;
+    elements.optionsChatName.textContent = chat.name;
+    renderChats();
+  } catch (_) {
+    chat.name = previousName;
+    showToast("Chat name could not be saved", 5000);
+  }
 }
 
 function highlightMatch(text, query) {
@@ -750,26 +944,43 @@ function scrollToBottom() {
   elements.messageStage.scrollTop = elements.messageStage.scrollHeight;
 }
 
-async function sendMessage() {
-  const text = elements.messageInput.value.trim();
-  if (!text) return;
-  const message = { id: uid(), chatId: state.activeChatId, text, createdAt: new Date().toISOString(), editedAt: null };
-  state.messages.push(message);
-  state.drafts[state.activeChatId] = "";
-  try {
+const sendTextMessage = SelfChatAppCore.createTextSendController({
+  getInput: () => elements.messageInput.value,
+  setInput(value) {
+    elements.messageInput.value = value;
+    state.drafts[state.activeChatId] = value;
+    if (!repository) setDraftBuffer(state.activeChatId, value);
+    resizeComposer();
+    updateComposerState();
+  },
+  getChatId: () => state.activeChatId,
+  createId: uid,
+  now: () => new Date().toISOString(),
+  addOptimistic(message) {
+    state.messages.push(message);
+    insertMessageElement(message, { scroll: true });
+    renderChats();
+    elements.messageInput.focus();
+  },
+  async persist(message) {
     await saveState();
-  } catch (_) {
+    if (!repository) clearDraftBuffer(message.chatId, "");
+  },
+  rollback(message) {
     state.messages = state.messages.filter(item => item.id !== message.id);
+    state.drafts[message.chatId] = elements.messageInput.value;
+    removeMessageElements([message.id]);
+    renderChats();
+  },
+  onFailure() {
+    state.drafts[state.activeChatId] = elements.messageInput.value;
     showToast("Message not saved — your text is still here", 5000);
     elements.messageInput.focus();
-    return;
   }
-  if (!repository) clearDraftBuffer(message.chatId, elements.messageInput.value);
-  elements.messageInput.value = "";
-  resizeComposer();
-  updateComposerState();
-  render();
-  elements.messageInput.focus();
+});
+
+function sendMessage() {
+  return sendTextMessage();
 }
 
 async function sendSticker(stickerId) {
@@ -783,7 +994,8 @@ async function sendSticker(stickerId) {
     return showToast("Sticker not saved", 5000);
   }
   closeStickerPanel();
-  render();
+  insertMessageElement(message, { scroll: true });
+  renderChats();
   elements.messageInput.focus();
 }
 
@@ -829,7 +1041,8 @@ async function sendImages(files, caption = "") {
   resizeComposer();
   updateComposerState();
   closeStickerPanel();
-  render();
+  addedMessageIds.map(id => state.messages.find(message => message.id === id)).filter(Boolean).forEach(message => insertMessageElement(message, { scroll: true }));
+  renderChats();
   elements.messageInput.focus();
   showToast(stored === 1 ? "Image sent" : `${stored} images sent`);
 }
@@ -947,11 +1160,36 @@ function resizeComposer() {
   elements.messageInput.style.height = `${Math.min(elements.messageInput.scrollHeight, 160)}px`;
 }
 
-function showToast(text, duration = 1800) {
-  elements.toast.textContent = text;
+function showToast(text, duration = 1800, action = null) {
+  elements.toast.replaceChildren();
+  const label = document.createElement("span");
+  label.textContent = text;
+  elements.toast.append(label);
+  elements.toast.classList.toggle("with-action", Boolean(action));
+  if (action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = action.label;
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      clearTimeout(showToast.timer);
+      await action.run();
+      elements.toast.classList.remove("show", "with-action");
+    }, { once: true });
+    elements.toast.append(button);
+  }
   elements.toast.classList.add("show");
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => elements.toast.classList.remove("show"), duration);
+  showToast.timer = setTimeout(() => elements.toast.classList.remove("show", "with-action"), duration);
+}
+
+function requestConfirmation({ title, message, confirmLabel = "Continue" }) {
+  if (confirmationResolver) confirmationResolver(false);
+  elements.confirmationTitle.textContent = title;
+  elements.confirmationMessage.textContent = message;
+  elements.confirmActionButton.textContent = confirmLabel;
+  elements.confirmationDialog.showModal();
+  return new Promise(resolve => { confirmationResolver = resolve; });
 }
 
 function closeContextMenu() {
@@ -961,25 +1199,36 @@ function closeContextMenu() {
 
 function clearMessageSelection() {
   selectedMessageIds.clear();
-  renderMessages();
+  updateSelectionUi();
 }
 
-async function deleteSelectedMessages() {
-  const messages = state.messages.filter(message => selectedMessageIds.has(message.id));
-  if (!messages.length || !confirm(`Move ${messages.length} selected message${messages.length === 1 ? "" : "s"} to Trash?`)) return;
+async function deleteMessagesWithUndo(messageIds) {
+  const ids = [...new Set(messageIds)];
+  const token = SelfChatAppCore.moveMessagesToTrash(state, ids, new Date().toISOString());
+  if (!token) return;
   try {
-    const deletedAt = new Date().toISOString();
-    messages.forEach(message => {
-      state.trash = state.trash.filter(item => item.id !== `message:${message.id}`);
-      state.trash.push({ id: `message:${message.id}`, entityType: "message", entityId: message.id, deletedAt, payload: { message: structuredClone(message), originalChatId: message.chatId } });
-    });
-    state.messages = state.messages.filter(message => !selectedMessageIds.has(message.id));
-    state.deletedMessageIds = [...new Set([...state.deletedMessageIds, ...messages.map(message => message.id)])];
     await saveState();
     selectedMessageIds.clear();
-    render();
-    showToast(`${messages.length} message${messages.length === 1 ? "" : "s"} moved to Trash`);
+    removeMessageElements(ids);
+    updateSelectionUi();
+    renderChats();
+    showToast(`${token.messages.length} message${token.messages.length === 1 ? "" : "s"} moved to Trash`, 6000, {
+      label: "Undo",
+      run: async () => {
+        try {
+          const restored = SelfChatAppCore.undoMessagesToTrash(state, token);
+          await saveState();
+          restored.forEach(message => insertMessageElement(message));
+          renderChats();
+          showToast(`${restored.length} message${restored.length === 1 ? "" : "s"} restored`);
+        } catch (_) { showToast("Undo could not be saved", 5000); }
+      }
+    });
   } catch (_) { showToast("Messages could not be moved to Trash", 5000); }
+}
+
+function deleteSelectedMessages() {
+  return deleteMessagesWithUndo([...selectedMessageIds]);
 }
 
 function openMoveDialog(messageIds) {
@@ -1079,6 +1328,23 @@ function renderTrash() {
 }
 
 elements.composer.addEventListener("submit", event => { event.preventDefault(); submitComposer(); });
+elements.confirmationForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const resolve = confirmationResolver;
+  confirmationResolver = null;
+  elements.confirmationDialog.close();
+  resolve?.(true);
+});
+$("#cancelConfirmationButton").addEventListener("click", () => {
+  const resolve = confirmationResolver;
+  confirmationResolver = null;
+  elements.confirmationDialog.close();
+  resolve?.(false);
+});
+elements.confirmationDialog.addEventListener("cancel", event => {
+  event.preventDefault();
+  $("#cancelConfirmationButton").click();
+});
 elements.messageInput.addEventListener("input", () => {
   resizeComposer();
   updateComposerState();
@@ -1090,6 +1356,14 @@ elements.messageInput.addEventListener("input", () => {
   draftSaveTimer = setTimeout(() => saveState({ significant: false }).then(() => { if (!repository) clearDraftBuffer(bufferedChatId, bufferedText); }).catch(() => showToast("Draft could not be saved", 4000)), 180);
 });
 elements.messageInput.addEventListener("keydown", event => {
+  if (event.key === "ArrowUp" && !elements.messageInput.value && !pendingImages.length && !event.isComposing) {
+    const lastEditable = [...messagesFor()].reverse().find(message => message.type !== "sticker");
+    if (lastEditable) {
+      event.preventDefault();
+      startInlineMessageEdit(lastEditable.id);
+    }
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     submitComposer();
@@ -1170,6 +1444,18 @@ elements.chatList.addEventListener("click", event => {
   if (row) selectChat(row.dataset.chatId);
 });
 elements.chatFilterInput.addEventListener("input", renderChats);
+elements.chatFilterInput.addEventListener("keydown", event => {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    elements.chatFilterInput.value = "";
+    renderChats();
+    elements.messageInput.focus();
+  }
+  if (event.key === "Enter") {
+    const first = elements.chatList.querySelector("[data-chat-id], [data-search-message-id]");
+    if (first) { event.preventDefault(); first.click(); }
+  }
+});
 
 renderStickerGrid();
 elements.stickerButton.addEventListener("click", () => {
@@ -1279,10 +1565,10 @@ $("#closeMessageSearch").addEventListener("click", () => {
   elements.messageSearchInput.value = "";
   elements.messageSearchPanel.hidden = true;
   messageSearchIndex = 0;
-  renderMessages();
+  renderMessages({ scroll: "preserve" });
   elements.messageInput.focus();
 });
-elements.messageSearchInput.addEventListener("input", () => { messageSearchIndex = 0; renderMessages(); });
+elements.messageSearchInput.addEventListener("input", () => { messageSearchIndex = 0; renderMessages({ scroll: "target" }); });
 elements.messageSearchInput.addEventListener("keydown", event => {
   if (event.key === "Escape") {
     event.preventDefault();
@@ -1298,27 +1584,25 @@ elements.nextSearchResult.addEventListener("click", () => navigateSearch(1));
 
 $("#chatMenuButton").addEventListener("click", () => elements.optionsDialog.showModal());
 $("#closeOptionsButton").addEventListener("click", () => elements.optionsDialog.close());
-$("#renameChatButton").addEventListener("click", async () => {
-  const chat = activeChat();
-  if (chat.id === "unsorted") return showToast("Unsorted is permanent");
-  const nextName = prompt("Rename chat", chat.name)?.trim();
-  if (!nextName) return;
-  chat.name = nextName.slice(0, 48);
-  chat.updatedAt = new Date().toISOString();
-  await saveState();
-  elements.optionsDialog.close();
-  render();
+$("#renameChatButton").addEventListener("click", startInlineChatRename);
+elements.activeChatNameInput.addEventListener("keydown", event => {
+  if (event.key === "Enter") { event.preventDefault(); finishInlineChatRename(); }
+  if (event.key === "Escape") { event.preventDefault(); finishInlineChatRename(true); }
 });
+elements.activeChatNameInput.addEventListener("blur", () => finishInlineChatRename());
 $("#deleteChatButton").addEventListener("click", async () => {
   if (state.chats.length === 1) return showToast("Keep at least one chat");
   const chat = activeChat();
   if (chat.id === "unsorted") return showToast("Unsorted is permanent");
-  if (!confirm(`Move “${chat.name}” and all its messages to Trash? You can restore it later.`)) return;
   const deletedMessages = state.messages.filter(message => message.chatId === chat.id);
+  const priorTrash = state.trash.filter(item => item.id === `chat:${chat.id}`);
+  const priorDeletedChat = state.deletedChatIds.includes(chat.id);
+  const priorDeletedMessages = state.deletedMessageIds.filter(id => deletedMessages.some(message => message.id === id));
+  const draft = state.drafts[chat.id] || "";
   state.trash = state.trash.filter(item => item.id !== `chat:${chat.id}`);
   state.trash.push({
     id: `chat:${chat.id}`, entityType: "chat", entityId: chat.id, deletedAt: new Date().toISOString(),
-    payload: { chat: structuredClone(chat), messages: structuredClone(deletedMessages), draft: state.drafts[chat.id] || "" }
+    payload: { chat: structuredClone(chat), messages: structuredClone(deletedMessages), draft }
   });
   state.deletedChatIds.push(chat.id);
   state.deletedMessageIds.push(...deletedMessages.map(message => message.id));
@@ -1328,7 +1612,29 @@ $("#deleteChatButton").addEventListener("click", async () => {
   await saveState();
   elements.optionsDialog.close();
   render();
-  showToast("Chat moved to Trash");
+  showToast("Chat moved to Trash", 6000, {
+    label: "Undo",
+    run: async () => {
+      try {
+        state.trash = state.trash.filter(item => item.id !== `chat:${chat.id}`);
+        state.trash.push(...priorTrash);
+        if (!state.chats.some(item => item.id === chat.id)) state.chats.push(chat);
+        const existing = new Set(state.messages.map(message => message.id));
+        state.messages.push(...deletedMessages.filter(message => !existing.has(message.id)));
+        if (draft) state.drafts[chat.id] = draft;
+        state.deletedChatIds = state.deletedChatIds.filter(id => id !== chat.id);
+        if (priorDeletedChat) state.deletedChatIds.push(chat.id);
+        const deletedIds = new Set(deletedMessages.map(message => message.id));
+        state.deletedMessageIds = state.deletedMessageIds.filter(id => !deletedIds.has(id));
+        state.deletedMessageIds.push(...priorDeletedMessages);
+        state.activeChatId = chat.id;
+        await saveState();
+        elements.messageInput.value = draft;
+        render();
+        showToast("Chat restored");
+      } catch (_) { showToast("Undo could not be saved", 5000); }
+    }
+  });
 });
 
 elements.moveForm.addEventListener("submit", async event => {
@@ -1347,12 +1653,14 @@ elements.moveForm.addEventListener("submit", async event => {
     await saveState();
     elements.moveDialog.close();
     selectedMessageIds.clear();
-    render();
+    removeMessageElements(moving.map(message => message.id));
+    updateSelectionUi();
+    renderChats();
     showToast(`${moving.length} message${moving.length === 1 ? "" : "s"} moved`);
   } catch (_) { showToast("Messages could not be moved", 5000); }
 });
 $("#cancelMoveButton").addEventListener("click", () => elements.moveDialog.close());
-elements.moveDialog.addEventListener("close", () => { selectedMessageIds.clear(); renderMessages(); });
+elements.moveDialog.addEventListener("close", () => { selectedMessageIds.clear(); updateSelectionUi(); });
 $("#moveSelectedButton").addEventListener("click", () => openMoveDialog([...selectedMessageIds]));
 $("#deleteSelectedButton").addEventListener("click", deleteSelectedMessages);
 $("#cancelSelectionButton").addEventListener("click", clearMessageSelection);
@@ -1427,6 +1735,7 @@ elements.trashList.addEventListener("click", async event => {
   const payload = item.payload || {};
   if (button.dataset.trashAction === "restore") {
     try {
+      let restoredMessage = null;
       if (item.entityType === "chat") {
         if (payload.chat && !state.chats.some(chat => chat.id === payload.chat.id)) state.chats.push(payload.chat);
         (payload.messages || []).forEach(message => {
@@ -1441,16 +1750,22 @@ elements.trashList.addEventListener("click", async event => {
         const restored = { ...payload.message, chatId: targetChatId, movedAt: targetChatId === payload.message.chatId ? payload.message.movedAt : new Date().toISOString() };
         state.messages = state.messages.filter(message => message.id !== item.entityId);
         state.messages.push(restored);
+        restoredMessage = restored;
         state.deletedMessageIds = state.deletedMessageIds.filter(id => id !== item.entityId);
       }
       state.trash = state.trash.filter(candidate => candidate.id !== item.id);
       await saveState();
-      render(); renderTrash();
+      if (restoredMessage) insertMessageElement(restoredMessage);
+      renderChats(); renderTrash();
       showToast(item.entityType === "chat" ? "Chat restored" : "Message restored");
     } catch (_) { showToast("Item could not be restored", 5000); }
     return;
   }
-  if (!confirm(`Erase “${trashLabel(item).slice(0, 80)}” from this browser permanently? This removes it from Trash, daily recovery points, migration backups, and unreferenced local attachment storage. This cannot be undone.`)) return;
+  if (!await requestConfirmation({
+    title: "Delete permanently?",
+    message: `Erase “${trashLabel(item).slice(0, 80)}” from this browser? This removes it from Trash, daily recovery points, migration backups, and unreferenced local attachment storage. This cannot be undone.`,
+    confirmLabel: "Delete permanently"
+  })) return;
   try {
     state.trash = state.trash.filter(candidate => candidate.id !== item.id);
     await saveState();
@@ -1462,7 +1777,11 @@ elements.trashList.addEventListener("click", async event => {
   } catch (_) { showToast("Item could not be permanently deleted", 5000); }
 });
 elements.emptyTrashButton.addEventListener("click", async () => {
-  if (!state.trash.length || !confirm("Erase every Trash item from this browser permanently? This also removes matching recovery, migration, history, and unreferenced image data. This cannot be undone.")) return;
+  if (!state.trash.length || !await requestConfirmation({
+    title: "Empty Trash permanently?",
+    message: "Erase every Trash item from this browser? This also removes matching recovery, migration, history, and unreferenced image data. This cannot be undone.",
+    confirmLabel: "Empty Trash"
+  })) return;
   const items = structuredClone(state.trash);
   try {
     state.trash = [];
@@ -1544,7 +1863,11 @@ elements.importInput.addEventListener("change", async () => {
     const parsed = SelfChatStorageCore.parseBackup(JSON.parse(await file.text()), DEFAULT_STATE);
     const imported = parsed.state;
     const imageCount = parsed.attachments.length;
-    if (!confirm(`Merge ${imported.chats.length} chats, ${imported.messages.length} messages, and ${imageCount} attachments from this backup? Existing records will be kept; matching stable IDs use the newer version.`)) return;
+    if (!await requestConfirmation({
+      title: "Import this backup?",
+      message: `Merge ${imported.chats.length} chats, ${imported.messages.length} messages, and ${imageCount} attachments? Existing records will be kept; matching stable IDs use the newer version.`,
+      confirmLabel: "Import backup"
+    })) return;
     importedImagesToRollback = parsed.attachments.map(image => ({ id: image.id, name: image.name || "Attachment", blob: dataUrlToBlob(image.data) }));
     existingImageIds = new Set((await getAllImages().catch(() => [])).map(image => image.id));
     const newAttachments = importedImagesToRollback.filter(image => !existingImageIds.has(image.id));
@@ -1612,7 +1935,7 @@ elements.messageList.addEventListener("click", event => {
   if (selectedMessageIds.size && messageArticle && !event.target.closest(".message-menu-trigger")) {
     const id = messageArticle.dataset.messageId;
     if (selectedMessageIds.has(id)) selectedMessageIds.delete(id); else selectedMessageIds.add(id);
-    renderMessages();
+    updateSelectionUi();
     return;
   }
   const clickedImage = event.target.closest(".message-media");
@@ -1666,16 +1989,13 @@ elements.contextMenu.addEventListener("click", async event => {
   }
   if (action === "edit") {
     if (message.type === "sticker") return;
-    editingMessageId = message.id;
-    elements.editMessageInput.value = message.type === "image" ? message.caption || "" : message.text;
     closeContextMenu();
-    elements.editDialog.showModal();
-    setTimeout(() => elements.editMessageInput.focus(), 40);
+    startInlineMessageEdit(message.id);
   }
   if (action === "select") {
     selectedMessageIds.add(message.id);
     closeContextMenu();
-    renderMessages();
+    updateSelectionUi();
     showToast("Select more messages, then choose Move");
   }
   if (action === "move") {
@@ -1684,31 +2004,9 @@ elements.contextMenu.addEventListener("click", async event => {
     openMoveDialog(ids);
   }
   if (action === "delete") {
-    if (confirm("Move this message to Trash? You can restore it later.")) {
-      state.deletedMessageIds.push(message.id);
-      state.messages = state.messages.filter(item => item.id !== message.id);
-      state.trash = state.trash.filter(item => item.id !== `message:${message.id}`);
-      state.trash.push({ id: `message:${message.id}`, entityType: "message", entityId: message.id, deletedAt: new Date().toISOString(), payload: { message: structuredClone(message), originalChatId: message.chatId } });
-      await saveState();
-      render();
-      showToast("Message moved to Trash");
-    }
     closeContextMenu();
+    await deleteMessagesWithUndo([message.id]);
   }
-});
-$("#cancelEditButton").addEventListener("click", () => elements.editDialog.close());
-elements.editForm.addEventListener("submit", async event => {
-  event.preventDefault();
-  const message = state.messages.find(item => item.id === editingMessageId);
-  const text = elements.editMessageInput.value.trim();
-  if (!message || (!text && message.type !== "image")) return;
-  message.editHistory = [...(message.editHistory || []), { text: message.type === "image" ? message.caption || "" : message.text, editedAt: message.editedAt || message.createdAt }];
-  if (message.type === "image") message.caption = text;
-  else message.text = text;
-  message.editedAt = new Date().toISOString();
-  await saveState();
-  elements.editDialog.close();
-  render();
 });
 
 elements.useThisTabButton.addEventListener("click", claimThisTab);
@@ -1729,6 +2027,17 @@ elements.singleTabScreen.addEventListener("keydown", event => {
   buttons[event.shiftKey ? buttons.length - 1 : 0].focus();
 });
 document.addEventListener("keydown", event => {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "k" && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    elements.chatFilterInput.focus();
+    elements.chatFilterInput.select();
+    return;
+  }
+  if ((event.ctrlKey || event.metaKey) && event.key.toLocaleLowerCase() === "f" && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    $("#messageSearchButton").click();
+    return;
+  }
   if (event.key !== "Escape" || document.querySelector("dialog[open]")) return;
   if (!elements.contextMenu.hidden) {
     event.preventDefault();

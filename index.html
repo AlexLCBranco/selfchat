@@ -8,7 +8,7 @@
   <title>SelfChat</title>
   <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=19">
+  <link rel="stylesheet" href="styles.css?v=20">
 </head>
 <body>
   <div class="app" id="app">
@@ -51,6 +51,7 @@
         <div class="chat-avatar" id="activeChatAvatar">🏀</div>
         <div class="conversation-title">
           <strong id="activeChatName">NBA</strong>
+          <input id="activeChatNameInput" maxlength="48" aria-label="Rename chat" hidden>
           <span>you</span>
         </div>
         <button class="icon-button" id="messageSearchButton" type="button" aria-label="Search this chat" title="Search this chat">
@@ -116,7 +117,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 17-8-8 17-1-7-8-2Z"/><path d="m11 13 9-10"/></svg>
         </button>
       </form>
-      <div class="keyboard-hint">Paste, drop, or choose images · Enter to send</div>
+      <div class="keyboard-hint">Ctrl+K switch chats · Ctrl+F find · ↑ edit last · Enter send</div>
     </main>
   </div>
 
@@ -209,18 +210,6 @@
     </div>
   </dialog>
 
-  <dialog id="editMessageDialog">
-    <form class="dialog-card" id="editMessageForm">
-      <div class="dialog-label">EDIT MESSAGE</div>
-      <h2>Revise the take.</h2>
-      <textarea id="editMessageInput" rows="6" maxlength="20000"></textarea>
-      <div class="dialog-actions">
-        <button class="button secondary" id="cancelEditButton" type="button">Cancel</button>
-        <button class="button primary" type="submit">Save</button>
-      </div>
-    </form>
-  </dialog>
-
   <dialog id="recoveryPreviewDialog">
     <div class="dialog-card compact">
       <div class="dialog-label">RECOVERY PREVIEW</div>
@@ -232,6 +221,18 @@
         <button class="button primary" id="confirmRecoveryButton" type="button">Restore</button>
       </div>
     </div>
+  </dialog>
+
+  <dialog id="confirmationDialog">
+    <form class="dialog-card compact" id="confirmationForm">
+      <div class="dialog-label">PLEASE CONFIRM</div>
+      <h2 id="confirmationTitle">Continue?</h2>
+      <p class="dialog-copy" id="confirmationMessage"></p>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelConfirmationButton" type="button">Cancel</button>
+        <button class="button danger-button" id="confirmActionButton" type="submit">Continue</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="stickerDialog">
@@ -288,6 +289,7 @@
   <div class="toast" id="toast" role="status"></div>
   <script src="storage-core.js?v=6"></script>
   <script src="storage.js?v=6"></script>
-  <script src="app.js?v=21"></script>
+  <script src="app-core.js?v=1"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>
