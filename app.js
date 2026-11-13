@@ -1083,38 +1083,23 @@ async function sendSticker(stickerId) {
 }
 
 async function sendAttachments(files, caption = "") {
-  const attachments = [...files].filter(Boolean);
-  if (!attachments.length) return showToast("Choose a file");
-  let stored = 0;
-  const addedMessageIds = [];
-  const addedImageIds = [];
-  const attachmentRecords = [];
-  for (const [index, file] of attachments.entries()) {
-    const attachmentId = uid();
-    try {
-      const isImage = file.type.startsWith("image/");
-      const record = { id: attachmentId, blob: file, name: file.name || `Pasted file ${index + 1}` };
-      if (repository) attachmentRecords.push(record);
-      else await putImage(record);
-      addedImageIds.push(attachmentId);
-      const messageId = uid();
-      const common = { id: messageId, chatId: state.activeChatId, caption: index === 0 ? caption : "", createdAt: new Date(Date.now() + index).toISOString(), editedAt: null, ...(index === 0 ? replyFields() : {}) };
-      state.messages.push(isImage
-        ? { ...common, type: "image", imageId: attachmentId, imageName: file.name || "Pasted image", imageType: file.type }
-        : { ...common, type: "file", attachmentId, fileName: file.name || "Pasted file", fileType: file.type || "application/octet-stream", fileSize: file.size });
-      addedMessageIds.push(messageId);
-      stored += 1;
-    } catch (_) {
-      showToast("Could not save an image locally");
-    }
+  const batch = SelfChatAppCore.createAttachmentBatch(files, {
+    chatId: state.activeChatId, caption, reply: replyFields(), createId: uid, now: Date.now
+  });
+  if (!batch.messages.length) return showToast("Choose a file");
+  const addedMessageIds = batch.messages.map(message => message.id);
+  const addedAttachmentIds = batch.attachments.map(record => record.id);
+  if (!repository) {
+    try { await addImages(batch.attachments); }
+    catch (_) { return showToast("Files could not be saved locally", 5000); }
   }
-  if (!stored) return;
+  state.messages.push(...batch.messages);
   state.drafts[state.activeChatId] = "";
   try {
-    await saveState({ attachmentsPut: attachmentRecords });
+    await saveState({ attachmentsPut: repository ? batch.attachments : [] });
   } catch (_) {
     state.messages = state.messages.filter(message => !addedMessageIds.includes(message.id));
-    if (!repository) await deleteImages(addedImageIds).catch(() => {});
+    if (!repository) await deleteImages(addedAttachmentIds).catch(() => {});
     showToast("Files not sent — they are still ready to send", 5000);
     return;
   }
@@ -1128,7 +1113,7 @@ async function sendAttachments(files, caption = "") {
   addedMessageIds.map(id => state.messages.find(message => message.id === id)).filter(Boolean).forEach(message => insertMessageElement(message, { scroll: true }));
   renderChats();
   elements.messageInput.focus();
-  showToast(stored === 1 ? "File sent" : `${stored} files sent`);
+  showToast(batch.messages.length === 1 ? "File sent" : `${batch.messages.length} files sent`);
 }
 
 function stageAttachments(files) {

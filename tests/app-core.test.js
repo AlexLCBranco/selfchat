@@ -89,3 +89,28 @@ test("copy selected returns clean message text in chronological order", () => {
   ];
   assert.equal(core.copySelectedText(messages, ["later", "first", "middle"]), "First line\n\nSecond line\n\nnotes.pdf");
 });
+
+test("attachment batch creates image and file messages with one reply binding", () => {
+  let nextId = 0;
+  const image = { name: "shot.png", type: "image/png", size: 12 };
+  const file = { name: "notes.pdf", type: "application/pdf", size: 34 };
+  const batch = core.createAttachmentBatch([image, file], {
+    chatId: "topic",
+    caption: "context",
+    reply: { replyToId: "original", replyPreview: "quoted" },
+    createId: () => `id-${++nextId}`,
+    now: () => Date.parse("2026-11-13T12:00:00.000Z")
+  });
+  assert.deepEqual(batch.attachments.map(record => ({ id: record.id, name: record.name })), [
+    { id: "id-1", name: "shot.png" },
+    { id: "id-3", name: "notes.pdf" }
+  ]);
+  assert.deepEqual(batch.messages[0], {
+    id: "id-2", chatId: "topic", caption: "context", createdAt: "2026-11-13T12:00:00.000Z", editedAt: null,
+    replyToId: "original", replyPreview: "quoted", type: "image", imageId: "id-1", imageName: "shot.png", imageType: "image/png"
+  });
+  assert.deepEqual(batch.messages[1], {
+    id: "id-4", chatId: "topic", caption: "", createdAt: "2026-11-13T12:00:00.001Z", editedAt: null,
+    type: "file", attachmentId: "id-3", fileName: "notes.pdf", fileType: "application/pdf", fileSize: 34
+  });
+});

@@ -1,6 +1,8 @@
 # SelfChat
 
-SelfChat is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v1.0.0 is a private, desktop-first message stream organized into multiple chats containing only you.
+
+It supports fast text entry, replies with quoted context, images, stickers, generic file attachments, local search, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 
 ## Run locally
 
@@ -23,14 +25,18 @@ The domain is attached to the project and follows future production deployments 
 ## Data and privacy
 
 - Chats, messages, drafts, Trash, recovery points, images, and attachments are stored in one transactional IndexedDB database.
+- Messages and attachment blobs commit atomically. Ordinary saves write only changed records.
 - On the first run of this storage version, v0.9.2 data is copied and count-verified before the unified database activates. The old sources remain in place for this version.
 - SelfChat asks the browser for persistent storage. The result is shown in the always-visible data status panel.
 - Message content is not sent to Vercel or another backend.
 - Each browser profile and origin has its own separate data. In particular, `http://127.0.0.1:47832` and `https://selfchat-home.vercel.app` are separate datasets; opening one does not show or change messages stored by the other.
 - A supported browser can remember a user-chosen folder and write a full automatic backup there after significant changes and at least daily. The data status panel warns when folder backup is unavailable.
 - Use the in-app export command to create a JSON backup.
-- Import and recovery restore merge by stable IDs and never delete data merely because it is absent from the incoming backup.
+- Backup import merges by stable IDs and never deletes data merely because it is absent from the incoming backup. Recovery points replace the active local projection with the selected historical state after preserving the current day when needed.
 - Message options can move one or several selected messages to another chat, including the permanent Unsorted chat, without changing message IDs or dates.
+- Replies keep a quoted preview and follow the original when it is edited or moved; they remain understandable when the original is in Trash or permanently deleted.
+- Images and generic files can be chosen, pasted, or dropped. Files show their name and size and can be opened or downloaded locally. Attachments are included in manual and automatic backups.
+- Selected messages can be copied as clean chronological text without names or timestamps.
 - Sidebar search finds chats and message content locally, while in-chat search navigates matches in context.
 - Deleting a message or chat moves it to Data settings → Trash. Permanent erasure removes matching browser-local history, recovery, migration, and unreferenced attachment copies after an irreversible-action confirmation.
 - Restored messages return to their original chat when it exists, otherwise to Unsorted. Local attachment bytes remain retained while live content, Trash, stickers, recovery points, or safety backups can still reference them.
@@ -46,6 +52,8 @@ Use separate chats for bounded topics—product decisions, bugs, features, or de
 
 - `AGENTS.md` — durable instructions for Codex
 - `DECISIONS.md` — product and technical source of truth
-- `index.html`, `styles.css`, `app.js` — application source
+- `index.html`, `styles.css`, `app.js`, `app-core.js` — interface and application behavior
+- `storage.js`, `storage-core.js` — unified IndexedDB repository and pure storage logic
+- `tests/` — app, storage, migration, backup, and durability regression tests
 - `server.js` — local static server
 - `service-worker.js`, `manifest.webmanifest`, `icon.svg` — installable app assets

@@ -102,5 +102,30 @@
     };
   }
 
-  return { createTextSendController, moveMessagesToTrash, undoMessagesToTrash, messagePlainText, copySelectedText, resolveReply };
+  function createAttachmentBatch(files, options) {
+    const createdAt = Number(options.now());
+    const attachments = [];
+    const messages = [];
+    [...(files || [])].filter(Boolean).forEach((file, index) => {
+      const attachmentId = options.createId();
+      const messageId = options.createId();
+      const isImage = String(file.type || "").startsWith("image/");
+      const name = file.name || `Pasted file ${index + 1}`;
+      attachments.push({ id: attachmentId, blob: file, name });
+      const common = {
+        id: messageId,
+        chatId: options.chatId,
+        caption: index === 0 ? options.caption || "" : "",
+        createdAt: new Date(createdAt + index).toISOString(),
+        editedAt: null,
+        ...(index === 0 ? options.reply || {} : {})
+      };
+      messages.push(isImage
+        ? { ...common, type: "image", imageId: attachmentId, imageName: name, imageType: file.type }
+        : { ...common, type: "file", attachmentId, fileName: name, fileType: file.type || "application/octet-stream", fileSize: Number(file.size) || 0 });
+    });
+    return { attachments, messages };
+  }
+
+  return { createTextSendController, moveMessagesToTrash, undoMessagesToTrash, messagePlainText, copySelectedText, resolveReply, createAttachmentBatch };
 });
