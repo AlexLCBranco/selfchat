@@ -58,3 +58,34 @@ test("Undo restores a deleted message and removes its Trash record", () => {
   assert.equal(state.trash.length, 0);
   assert.equal(state.deletedMessageIds.includes(message.id), false);
 });
+
+test("reply keeps a preview when its original is permanently deleted", () => {
+  const reply = { id: "r1", chatId: "topic", text: "response", replyToId: "m1", replyPreview: "original text" };
+  const state = { messages: [reply], trash: [] };
+  assert.deepEqual(core.resolveReply(state, reply), {
+    id: "m1", chatId: null, text: "original text", status: "deleted"
+  });
+});
+
+test("reply resolution follows an edited, moved, or trashed original", () => {
+  const reply = { id: "r1", chatId: "topic", text: "response", replyToId: "m1", replyPreview: "old text" };
+  const original = { id: "m1", chatId: "topic", text: "edited text", editedAt: "2026-11-13T12:01:00.000Z" };
+  const state = { messages: [original, reply], trash: [] };
+  assert.equal(core.resolveReply(state, reply).text, "edited text");
+  original.chatId = "elsewhere";
+  assert.equal(core.resolveReply(state, reply).status, "moved");
+  state.messages = [reply];
+  state.trash = [{ entityType: "message", entityId: "m1", payload: { message: original } }];
+  assert.deepEqual(core.resolveReply(state, reply), {
+    id: "m1", chatId: "elsewhere", text: "edited text", status: "trashed"
+  });
+});
+
+test("copy selected returns clean message text in chronological order", () => {
+  const messages = [
+    { id: "later", createdAt: "2026-11-13T12:02:00.000Z", type: "file", fileName: "notes.pdf" },
+    { id: "first", createdAt: "2026-11-13T12:00:00.000Z", text: "First line" },
+    { id: "middle", createdAt: "2026-11-13T12:01:00.000Z", text: "Second line" }
+  ];
+  assert.equal(core.copySelectedText(messages, ["later", "first", "middle"]), "First line\n\nSecond line\n\nnotes.pdf");
+});

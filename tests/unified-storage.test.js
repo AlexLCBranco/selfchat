@@ -134,6 +134,21 @@ test("backup export and import round trip preserves state and attachment data", 
   assert.deepEqual(imported.attachments, exported.attachments);
 });
 
+test("file attachment survives a backup round trip", () => {
+  const fileMessage = {
+    id: "file-message", chatId: "topic", type: "file", attachmentId: "file-1",
+    fileName: "notes.pdf", fileType: "application/pdf", fileSize: 4,
+    createdAt: "2026-11-13T12:00:00.000Z"
+  };
+  const withFile = core.normalizeState({ ...fixture, messages: [...fixture.messages, fileMessage] }, fallback);
+  const exported = core.backupPayload(withFile, [{
+    id: "file-1", name: "notes.pdf", type: "application/pdf", data: "data:application/pdf;base64,dGVzdA=="
+  }]);
+  const imported = core.parseBackup(JSON.parse(JSON.stringify(exported)), fallback);
+  assert.deepEqual(imported.state.messages.find(message => message.id === fileMessage.id), fileMessage);
+  assert.deepEqual(imported.attachments, exported.attachments);
+});
+
 test("old v0.9.2 backup files still import", () => {
   const oldBackup = { ...fixture, schemaVersion: 2, images: [{ id: "image-1", name: "one.png", data: "data:image/png;base64,aW1hZ2U=" }] };
   const imported = core.parseBackup(oldBackup, fallback);

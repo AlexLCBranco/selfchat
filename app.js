@@ -67,7 +67,8 @@ const elements = {
   originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
   exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton"),
   confirmationDialog: $("#confirmationDialog"), confirmationForm: $("#confirmationForm"), confirmationTitle: $("#confirmationTitle"),
-  confirmationMessage: $("#confirmationMessage"), confirmActionButton: $("#confirmActionButton")
+  confirmationMessage: $("#confirmationMessage"), confirmActionButton: $("#confirmActionButton"),
+  replyComposerPreview: $("#replyComposerPreview"), replyComposerText: $("#replyComposerText")
 };
 
 let state = loadLegacyState();
@@ -101,6 +102,7 @@ let automaticBackupRunning = false;
 let confirmationResolver = null;
 let renamingChatId = null;
 let inlineEditingMessageId = null;
+let pendingReplyId = null;
 
 function activeTabId() {
   try {
@@ -554,7 +556,31 @@ function stickerFor(message) {
 function messageLabel(message) {
   if (message.type === "sticker") return stickerFor(message)?.label || "Sticker";
   if (message.type === "image") return `Image ${message.imageName || ""} ${message.caption || ""}`.trim();
+  if (message.type === "file") return `${message.fileName || "File"} ${message.caption || ""}`.trim();
   return message.text || "";
+}
+
+function messagePlainText(message) {
+  return SelfChatAppCore.messagePlainText(message, stickerFor(message)?.label || "Sticker");
+}
+
+function replyFields() {
+  const original = state.messages.find(message => message.id === pendingReplyId);
+  return original ? { replyToId: original.id, replyPreview: messagePlainText(original).slice(0, 240) } : {};
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10240 ? 1 : 0)} KB`;
+  return `${(value / 1024 / 1024).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+}
+
+function replyQuoteHtml(message) {
+  const reply = SelfChatAppCore.resolveReply(state, message, messagePlainText);
+  if (!reply) return "";
+  const status = reply.status === "moved" ? "Moved to another chat" : reply.status === "trashed" ? "Original is in Trash" : reply.status === "deleted" ? "Original message deleted" : "";
+  return `<button class="reply-quote" type="button" data-reply-original-id="${escapeHtml(reply.id)}" data-reply-chat-id="${escapeHtml(reply.chatId || "")}" data-reply-status="${reply.status}"><strong>Reply</strong><span>${escapeHtml(reply.text || "Original message")}</span>${status ? `<small>${escapeHtml(status)}</small>` : ""}</button>`;
 }
 
 function escapeHtml(value = "") {
@@ -618,19 +644,22 @@ function renderConversation() {
 function messageArticleHtml(message, query = "", activeMatchId = null) {
   const sticker = message.type === "sticker" ? stickerFor(message) : null;
   const image = message.type === "image";
+  const file = message.type === "file";
   const stickerImage = sticker?.imageId;
-  const content = image
+  const content = file
+    ? `<div class="file-card"><span class="file-icon">FILE</span><span class="file-copy"><strong>${escapeHtml(message.fileName || "File")}</strong><small>${escapeHtml(formatFileSize(message.fileSize))}</small></span><span class="file-actions"><a data-file-open data-attachment-id="${escapeHtml(message.attachmentId)}" target="_blank" rel="noopener">Open</a><a data-file-download data-attachment-id="${escapeHtml(message.attachmentId)}" download="${escapeHtml(message.fileName || "download")}">Download</a></span></div>${message.caption ? `<span class="file-caption">${query ? highlightMatch(message.caption, query) : escapeHtml(message.caption)}</span>` : ""}`
+    : image
     ? `<img class="message-media" data-image-id="${escapeHtml(message.imageId)}" alt="${escapeHtml(message.imageName || "Image")}" hidden><span class="image-fallback">Loading image…<small>${escapeHtml(message.imageName || "Image")}</small></span>${message.caption ? `<span class="image-caption">${query ? highlightMatch(message.caption, query) : escapeHtml(message.caption)}</span>` : ""}`
     : stickerImage
     ? `<img class="sticker-art sticker-image" data-image-id="${escapeHtml(sticker.imageId)}" alt="${escapeHtml(sticker.label)}" hidden><span class="sticker-image-fallback">Loading sticker…</span>`
     : sticker
     ? `<span class="sticker-art sticker-${sticker.tone}" role="img" aria-label="${escapeHtml(sticker.label)}"><span class="sticker-emoji">${escapeHtml(sticker.emoji)}</span>${sticker.caption ? `<span class="sticker-caption">${escapeHtml(sticker.caption)}</span>` : ""}</span>`
     : `<span class="message-text">${renderLinkedText(message.text || "", query)}</span>`;
-  return `<article class="message${sticker ? " sticker-message" : image ? " image-message" : " text-message"}${message.editedAt ? " message-edited" : ""}${selectedMessageIds.size ? " selection-mode" : ""}${selectedMessageIds.has(message.id) ? " selected" : ""}${message.id === activeMatchId ? " search-match-active" : ""}${message.id === focusedMessageId ? " flash-target" : ""}" data-message-id="${escapeHtml(message.id)}" aria-selected="${selectedMessageIds.has(message.id)}">
+  return `<article class="message${sticker ? " sticker-message" : image ? " image-message" : file ? " file-message" : " text-message"}${message.editedAt ? " message-edited" : ""}${selectedMessageIds.size ? " selection-mode" : ""}${selectedMessageIds.has(message.id) ? " selected" : ""}${message.id === activeMatchId ? " search-match-active" : ""}${message.id === focusedMessageId ? " flash-target" : ""}" data-message-id="${escapeHtml(message.id)}" aria-selected="${selectedMessageIds.has(message.id)}">
     <button class="message-menu-trigger" type="button" aria-label="Message options">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
     </button>
-    ${content}
+    ${replyQuoteHtml(message)}${content}
     <span class="message-meta">${message.editedAt ? "edited · " : ""}${formatTime(message.createdAt)}
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 13 4 4L16 7"/><path d="m9 16 2 2L22 7"/></svg>
     </span>
@@ -687,6 +716,7 @@ function renderMessages({ scroll = "bottom" } = {}) {
   }).join("");
 
   hydrateImages(renderToken, activeMatchId || focusedMessageId);
+  hydrateFileAttachments(renderToken);
   if (activeMatchId) requestAnimationFrame(() => scrollMessageIntoView(activeMatchId));
   else if (focusedMessageId) requestAnimationFrame(() => {
     scrollMessageIntoView(focusedMessageId);
@@ -738,6 +768,27 @@ async function hydrateImages(renderToken, anchoredMessageId = null, root = eleme
   }));
 }
 
+async function hydrateFileAttachments(renderToken, root = elements.messageList) {
+  const links = [...root.querySelectorAll("[data-attachment-id]:not([href])")];
+  await Promise.all(links.map(async link => {
+    try {
+      let url = imageUrlCache.get(link.dataset.attachmentId);
+      const record = url ? null : await getImage(link.dataset.attachmentId);
+      if (renderToken !== imageRenderToken || !link.isConnected) return;
+      if (!url) {
+        if (!record?.blob) throw new Error("File not found");
+        url = URL.createObjectURL(record.blob);
+        imageUrlCache.set(link.dataset.attachmentId, url);
+      }
+      link.href = url;
+    } catch (_) {
+      link.removeAttribute("href");
+      link.setAttribute("aria-disabled", "true");
+      link.title = "File unavailable";
+    }
+  }));
+}
+
 function updateMessageListVisibility() {
   const hasMessages = messagesFor().length > 0;
   elements.emptyState.hidden = hasMessages;
@@ -767,6 +818,7 @@ function insertMessageElement(message, { scroll = false } = {}) {
   updateMessageListVisibility();
   const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
   hydrateImages(imageRenderToken, null, article);
+  hydrateFileAttachments(imageRenderToken, article);
   if (scroll) requestAnimationFrame(scrollToBottom);
 }
 
@@ -798,11 +850,11 @@ function cancelInlineMessageEdit() {
 function updateEditedMessageElement(message) {
   const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
   if (!article) return;
-  if (message.type === "image") {
-    let caption = article.querySelector(".image-caption");
+  if (message.type === "image" || message.type === "file") {
+    let caption = article.querySelector(message.type === "image" ? ".image-caption" : ".file-caption");
     if (message.caption && !caption) {
       caption = document.createElement("span");
-      caption.className = "image-caption";
+      caption.className = message.type === "image" ? "image-caption" : "file-caption";
       article.querySelector(".message-meta")?.before(caption);
     }
     if (caption) {
@@ -816,6 +868,34 @@ function updateEditedMessageElement(message) {
   const meta = article.querySelector(".message-meta");
   if (meta) meta.innerHTML = `edited · ${formatTime(message.createdAt)}<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m2 13 4 4L16 7"/><path d="m9 16 2 2L22 7"/></svg>`;
   article.classList.add("message-edited");
+  updateReplyPreviews(message.id);
+}
+
+function updateReplyPreviews(originalId) {
+  state.messages.filter(message => message.replyToId === originalId && message.chatId === state.activeChatId).forEach(message => {
+    const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
+    if (!article) return;
+    const current = article.querySelector(".reply-quote");
+    const holder = document.createElement("div");
+    holder.innerHTML = replyQuoteHtml(message);
+    if (current && holder.firstElementChild) current.replaceWith(holder.firstElementChild);
+  });
+}
+
+function cancelReply() {
+  pendingReplyId = null;
+  elements.replyComposerPreview.hidden = true;
+  elements.replyComposerText.textContent = "";
+}
+
+function startReply(messageId) {
+  const message = state.messages.find(item => item.id === messageId);
+  if (!message) return;
+  pendingReplyId = message.id;
+  elements.replyComposerText.textContent = messagePlainText(message);
+  elements.replyComposerPreview.hidden = false;
+  closeContextMenu();
+  elements.messageInput.focus();
 }
 
 function startInlineMessageEdit(messageId) {
@@ -830,7 +910,7 @@ function startInlineMessageEdit(messageId) {
   form.className = "inline-message-edit";
   form.innerHTML = `<textarea maxlength="20000" aria-label="Edit message"></textarea><div class="inline-message-edit-actions"><button type="button">Cancel</button><button type="submit">Save</button></div>`;
   const input = form.querySelector("textarea");
-  input.value = message.type === "image" ? message.caption || "" : message.text || "";
+  input.value = message.type === "image" || message.type === "file" ? message.caption || "" : message.text || "";
   form.querySelector('button[type="button"]').addEventListener("click", cancelInlineMessageEdit);
   input.addEventListener("keydown", event => {
     if (event.key === "Escape") { event.preventDefault(); cancelInlineMessageEdit(); }
@@ -839,10 +919,10 @@ function startInlineMessageEdit(messageId) {
   form.addEventListener("submit", async event => {
     event.preventDefault();
     const text = input.value.trim();
-    if (!text && message.type !== "image") return;
+    if (!text && message.type !== "image" && message.type !== "file") return;
     const previous = structuredClone(message);
-    message.editHistory = [...(message.editHistory || []), { text: message.type === "image" ? message.caption || "" : message.text, editedAt: message.editedAt || message.createdAt }];
-    if (message.type === "image") message.caption = text;
+    message.editHistory = [...(message.editHistory || []), { text: message.type === "image" || message.type === "file" ? message.caption || "" : message.text, editedAt: message.editedAt || message.createdAt }];
+    if (message.type === "image" || message.type === "file") message.caption = text;
     else message.text = text;
     message.editedAt = new Date().toISOString();
     try {
@@ -954,6 +1034,7 @@ const sendTextMessage = SelfChatAppCore.createTextSendController({
     updateComposerState();
   },
   getChatId: () => state.activeChatId,
+  getExtra: replyFields,
   createId: uid,
   now: () => new Date().toISOString(),
   addOptimistic(message) {
@@ -964,6 +1045,7 @@ const sendTextMessage = SelfChatAppCore.createTextSendController({
   },
   async persist(message) {
     await saveState();
+    if (message.replyToId === pendingReplyId) cancelReply();
     if (!repository) clearDraftBuffer(message.chatId, "");
   },
   rollback(message) {
@@ -985,7 +1067,7 @@ function sendMessage() {
 
 async function sendSticker(stickerId) {
   if (!allStickers().some(sticker => sticker.id === stickerId)) return;
-  const message = { id: uid(), chatId: state.activeChatId, type: "sticker", stickerId, createdAt: new Date().toISOString(), editedAt: null };
+  const message = { id: uid(), chatId: state.activeChatId, type: "sticker", stickerId, createdAt: new Date().toISOString(), editedAt: null, ...replyFields() };
   state.messages.push(message);
   try {
     await saveState();
@@ -994,31 +1076,32 @@ async function sendSticker(stickerId) {
     return showToast("Sticker not saved", 5000);
   }
   closeStickerPanel();
+  cancelReply();
   insertMessageElement(message, { scroll: true });
   renderChats();
   elements.messageInput.focus();
 }
 
-async function sendImages(files, caption = "") {
-  const images = [...files].filter(file => file.type.startsWith("image/"));
-  if (!images.length) return showToast("Choose an image file");
+async function sendAttachments(files, caption = "") {
+  const attachments = [...files].filter(Boolean);
+  if (!attachments.length) return showToast("Choose a file");
   let stored = 0;
   const addedMessageIds = [];
   const addedImageIds = [];
   const attachmentRecords = [];
-  for (const [index, file] of images.entries()) {
-    const imageId = uid();
+  for (const [index, file] of attachments.entries()) {
+    const attachmentId = uid();
     try {
-      const record = { id: imageId, blob: file, name: file.name || `Pasted image ${index + 1}` };
+      const isImage = file.type.startsWith("image/");
+      const record = { id: attachmentId, blob: file, name: file.name || `Pasted file ${index + 1}` };
       if (repository) attachmentRecords.push(record);
       else await putImage(record);
-      addedImageIds.push(imageId);
+      addedImageIds.push(attachmentId);
       const messageId = uid();
-      state.messages.push({
-        id: messageId, chatId: state.activeChatId, type: "image", imageId,
-        imageName: file.name || "Pasted image", imageType: file.type, caption: index === 0 ? caption : "",
-        createdAt: new Date(Date.now() + index).toISOString(), editedAt: null
-      });
+      const common = { id: messageId, chatId: state.activeChatId, caption: index === 0 ? caption : "", createdAt: new Date(Date.now() + index).toISOString(), editedAt: null, ...(index === 0 ? replyFields() : {}) };
+      state.messages.push(isImage
+        ? { ...common, type: "image", imageId: attachmentId, imageName: file.name || "Pasted image", imageType: file.type }
+        : { ...common, type: "file", attachmentId, fileName: file.name || "Pasted file", fileType: file.type || "application/octet-stream", fileSize: file.size });
       addedMessageIds.push(messageId);
       stored += 1;
     } catch (_) {
@@ -1032,7 +1115,7 @@ async function sendImages(files, caption = "") {
   } catch (_) {
     state.messages = state.messages.filter(message => !addedMessageIds.includes(message.id));
     if (!repository) await deleteImages(addedImageIds).catch(() => {});
-    showToast("Images not sent — they are still ready to send", 5000);
+    showToast("Files not sent — they are still ready to send", 5000);
     return;
   }
   if (!repository) clearDraftBuffer(state.activeChatId, elements.messageInput.value);
@@ -1041,16 +1124,17 @@ async function sendImages(files, caption = "") {
   resizeComposer();
   updateComposerState();
   closeStickerPanel();
+  cancelReply();
   addedMessageIds.map(id => state.messages.find(message => message.id === id)).filter(Boolean).forEach(message => insertMessageElement(message, { scroll: true }));
   renderChats();
   elements.messageInput.focus();
-  showToast(stored === 1 ? "Image sent" : `${stored} images sent`);
+  showToast(stored === 1 ? "File sent" : `${stored} files sent`);
 }
 
-function stageImages(files) {
-  const images = [...files].filter(file => file.type.startsWith("image/"));
-  if (!images.length) return showToast("Choose an image file");
-  images.forEach(file => pendingImages.push({ id: uid(), file, url: URL.createObjectURL(file) }));
+function stageAttachments(files) {
+  const attachments = [...files].filter(Boolean);
+  if (!attachments.length) return showToast("Choose a file");
+  attachments.forEach(file => pendingImages.push({ id: uid(), file, url: file.type.startsWith("image/") ? URL.createObjectURL(file) : null }));
   renderPendingImages();
   closeStickerPanel();
   elements.messageInput.focus();
@@ -1058,13 +1142,15 @@ function stageImages(files) {
 
 function renderPendingImages() {
   elements.imagePreviewTray.hidden = pendingImages.length === 0;
-  elements.imagePreviewTitle.textContent = pendingImages.length === 1 ? "Image ready to send" : `${pendingImages.length} images ready to send`;
-  elements.imagePreviewList.innerHTML = pendingImages.map(image => `<div class="pending-image"><img src="${image.url}" alt="${escapeHtml(image.file.name || "Pasted image")}"><button type="button" data-remove-pending-image="${image.id}" aria-label="Remove image" title="Remove image">×</button></div>`).join("");
+  elements.imagePreviewTitle.textContent = pendingImages.length === 1 ? "File ready to send" : `${pendingImages.length} files ready to send`;
+  elements.imagePreviewList.innerHTML = pendingImages.map(item => item.url
+    ? `<div class="pending-image"><img src="${item.url}" alt="${escapeHtml(item.file.name || "Pasted image")}"><button type="button" data-remove-pending-image="${item.id}" aria-label="Remove file" title="Remove file">×</button></div>`
+    : `<div class="pending-file"><strong>${escapeHtml(item.file.name || "Pasted file")}</strong><small>${escapeHtml(formatFileSize(item.file.size))}</small><button type="button" data-remove-pending-image="${item.id}" aria-label="Remove file" title="Remove file">×</button></div>`).join("");
   updateComposerState();
 }
 
 function clearPendingImages() {
-  pendingImages.forEach(image => URL.revokeObjectURL(image.url));
+  pendingImages.forEach(image => { if (image.url) URL.revokeObjectURL(image.url); });
   pendingImages = [];
   renderPendingImages();
 }
@@ -1077,7 +1163,7 @@ function updateComposerState() {
 async function submitComposer() {
   if (pendingImages.length) {
     const files = pendingImages.map(image => image.file);
-    await sendImages(files, elements.messageInput.value.trim());
+    await sendAttachments(files, elements.messageInput.value.trim());
     return;
   }
   sendMessage();
@@ -1141,6 +1227,7 @@ function stageStickerImage(file) {
 
 async function selectChat(id, messageId = null) {
   clearPendingImages();
+  cancelReply();
   state.activeChatId = id;
   elements.messageSearchInput.value = "";
   elements.messageSearchPanel.hidden = true;
@@ -1212,6 +1299,7 @@ async function deleteMessagesWithUndo(messageIds) {
     removeMessageElements(ids);
     updateSelectionUi();
     renderChats();
+    ids.forEach(updateReplyPreviews);
     showToast(`${token.messages.length} message${token.messages.length === 1 ? "" : "s"} moved to Trash`, 6000, {
       label: "Undo",
       run: async () => {
@@ -1220,6 +1308,7 @@ async function deleteMessagesWithUndo(messageIds) {
           await saveState();
           restored.forEach(message => insertMessageElement(message));
           renderChats();
+          ids.forEach(updateReplyPreviews);
           showToast(`${restored.length} message${restored.length === 1 ? "" : "s"} restored`);
         } catch (_) { showToast("Undo could not be saved", 5000); }
       }
@@ -1269,10 +1358,12 @@ function purgeTargets(items) {
         messageIds.add(message.id);
         entityIds.add(message.id);
         if (message.imageId) imageIds.add(message.imageId);
+        if (message.attachmentId) imageIds.add(message.attachmentId);
       });
     } else {
       messageIds.add(item.entityId);
       if (payload.message?.imageId) imageIds.add(payload.message.imageId);
+      if (payload.message?.attachmentId) imageIds.add(payload.message.attachmentId);
     }
   });
   return { entityIds, chatIds, messageIds, imageIds };
@@ -1371,30 +1462,28 @@ elements.messageInput.addEventListener("keydown", event => {
 });
 elements.imageButton.addEventListener("click", () => elements.imageInput.click());
 elements.imageInput.addEventListener("change", () => {
-  stageImages(elements.imageInput.files);
+  stageAttachments(elements.imageInput.files);
   elements.imageInput.value = "";
 });
 document.addEventListener("paste", event => {
-  const itemImages = [...(event.clipboardData?.items || [])]
-    .filter(item => item.kind === "file" && item.type.startsWith("image/"))
+  const itemFiles = [...(event.clipboardData?.items || [])]
+    .filter(item => item.kind === "file")
     .map(item => item.getAsFile())
     .filter(Boolean);
-  const images = itemImages.length
-    ? itemImages
-    : [...(event.clipboardData?.files || [])].filter(file => file.type.startsWith("image/"));
-  if (!images.length) return;
+  const files = itemFiles.length ? itemFiles : [...(event.clipboardData?.files || [])];
+  if (!files.length) return;
   event.preventDefault();
   if (elements.stickerDialog.open) {
-    stageStickerImage(images[0]);
+    stageStickerImage(files.find(file => file.type.startsWith("image/")));
     return;
   }
-  stageImages(images);
+  stageAttachments(files);
 });
 elements.imagePreviewList.addEventListener("click", event => {
   const button = event.target.closest("[data-remove-pending-image]");
   if (!button) return;
   const image = pendingImages.find(item => item.id === button.dataset.removePendingImage);
-  if (image) URL.revokeObjectURL(image.url);
+  if (image?.url) URL.revokeObjectURL(image.url);
   pendingImages = pendingImages.filter(item => item !== image);
   renderPendingImages();
   elements.messageInput.focus();
@@ -1431,7 +1520,7 @@ document.addEventListener("drop", event => {
     stageStickerImage([...event.dataTransfer.files].find(file => file.type.startsWith("image/")));
     return;
   }
-  stageImages(event.dataTransfer.files);
+  stageAttachments(event.dataTransfer.files);
 });
 elements.chatList.addEventListener("click", event => {
   const result = event.target.closest("[data-search-message-id]");
@@ -1654,6 +1743,7 @@ elements.moveForm.addEventListener("submit", async event => {
     elements.moveDialog.close();
     selectedMessageIds.clear();
     removeMessageElements(moving.map(message => message.id));
+    moving.forEach(message => updateReplyPreviews(message.id));
     updateSelectionUi();
     renderChats();
     showToast(`${moving.length} message${moving.length === 1 ? "" : "s"} moved`);
@@ -1662,8 +1752,15 @@ elements.moveForm.addEventListener("submit", async event => {
 $("#cancelMoveButton").addEventListener("click", () => elements.moveDialog.close());
 elements.moveDialog.addEventListener("close", () => { selectedMessageIds.clear(); updateSelectionUi(); });
 $("#moveSelectedButton").addEventListener("click", () => openMoveDialog([...selectedMessageIds]));
+$("#copySelectedButton").addEventListener("click", async () => {
+  const text = SelfChatAppCore.copySelectedText(state.messages, selectedMessageIds, messagePlainText);
+  if (!text) return;
+  await navigator.clipboard.writeText(text);
+  showToast(`${selectedMessageIds.size} message${selectedMessageIds.size === 1 ? "" : "s"} copied`);
+});
 $("#deleteSelectedButton").addEventListener("click", deleteSelectedMessages);
 $("#cancelSelectionButton").addEventListener("click", clearMessageSelection);
+$("#cancelReplyButton").addEventListener("click", () => { cancelReply(); elements.messageInput.focus(); });
 
 async function renderRecoveryPoints() {
   elements.recoveryStatus.textContent = "Loading recovery points…";
@@ -1756,6 +1853,7 @@ elements.trashList.addEventListener("click", async event => {
       state.trash = state.trash.filter(candidate => candidate.id !== item.id);
       await saveState();
       if (restoredMessage) insertMessageElement(restoredMessage);
+      updateReplyPreviews(item.entityId);
       renderChats(); renderTrash();
       showToast(item.entityType === "chat" ? "Chat restored" : "Message restored");
     } catch (_) { showToast("Item could not be restored", 5000); }
@@ -1770,6 +1868,7 @@ elements.trashList.addEventListener("click", async event => {
     state.trash = state.trash.filter(candidate => candidate.id !== item.id);
     await saveState();
     await completePermanentPurge([item]);
+    updateReplyPreviews(item.entityId);
     renderTrash();
     await renderRecoveryPoints();
     await renderStorageDiagnostics();
@@ -1787,6 +1886,7 @@ elements.emptyTrashButton.addEventListener("click", async () => {
     state.trash = [];
     await saveState();
     await completePermanentPurge(items);
+    items.forEach(item => updateReplyPreviews(item.entityId));
     renderTrash();
     await renderRecoveryPoints();
     await renderStorageDiagnostics();
@@ -1920,9 +2020,9 @@ function openMessageContextMenu(messageElement, x, y) {
   if (!messageElement) return;
   contextMessageId = messageElement.dataset.messageId;
   const selectedMessage = state.messages.find(item => item.id === contextMessageId);
-  elements.contextMenu.querySelector('[data-action="copy"]').hidden = Boolean(selectedMessage?.type);
+  elements.contextMenu.querySelector('[data-action="copy"]').hidden = false;
   elements.contextMenu.querySelector('[data-action="edit"]').hidden = selectedMessage?.type === "sticker";
-  elements.contextMenu.querySelector('[data-action="edit"]').textContent = selectedMessage?.type === "image" ? "Edit caption" : "Edit";
+  elements.contextMenu.querySelector('[data-action="edit"]').textContent = selectedMessage?.type === "image" || selectedMessage?.type === "file" ? "Edit caption" : "Edit";
   elements.contextMenu.querySelector('[data-action="move"]').textContent = selectedMessageIds.size > 1 ? `Move ${selectedMessageIds.size} messages` : "Move";
   elements.contextMenu.style.left = `${Math.min(x, window.innerWidth - 160)}px`;
   elements.contextMenu.style.top = `${Math.min(y, window.innerHeight - 190)}px`;
@@ -1936,6 +2036,14 @@ elements.messageList.addEventListener("click", event => {
     const id = messageArticle.dataset.messageId;
     if (selectedMessageIds.has(id)) selectedMessageIds.delete(id); else selectedMessageIds.add(id);
     updateSelectionUi();
+    return;
+  }
+  const replyQuote = event.target.closest(".reply-quote");
+  if (replyQuote) {
+    const status = replyQuote.dataset.replyStatus;
+    if (status === "available") scrollMessageIntoView(replyQuote.dataset.replyOriginalId);
+    else if (status === "moved" && replyQuote.dataset.replyChatId) selectChat(replyQuote.dataset.replyChatId, replyQuote.dataset.replyOriginalId);
+    else showToast(status === "trashed" ? "Original message is in Trash" : "Original message was permanently deleted");
     return;
   }
   const clickedImage = event.target.closest(".message-media");
@@ -1981,9 +2089,9 @@ elements.contextMenu.addEventListener("click", async event => {
   const action = event.target.dataset.action;
   const message = state.messages.find(item => item.id === contextMessageId);
   if (!action || !message) return;
+  if (action === "reply") startReply(message.id);
   if (action === "copy") {
-    if (message.type === "sticker") return;
-    await navigator.clipboard.writeText(message.text || "");
+    await navigator.clipboard.writeText(messagePlainText(message));
     showToast("Copied");
     closeContextMenu();
   }
@@ -1996,7 +2104,7 @@ elements.contextMenu.addEventListener("click", async event => {
     selectedMessageIds.add(message.id);
     closeContextMenu();
     updateSelectionUi();
-    showToast("Select more messages, then choose Move");
+    showToast("Select more messages, then choose an action");
   }
   if (action === "move") {
     const ids = selectedMessageIds.has(message.id) ? [...selectedMessageIds] : [message.id];
@@ -2047,6 +2155,11 @@ document.addEventListener("keydown", event => {
   if (!elements.messageSearchPanel.hidden) {
     event.preventDefault();
     $("#closeMessageSearch").click();
+    return;
+  }
+  if (pendingReplyId) {
+    event.preventDefault();
+    cancelReply();
     return;
   }
   if (selectedMessageIds.size) {

@@ -169,6 +169,10 @@
         missingAttachments.push({ entityType: "message", entityId: message.id, imageId: message.imageId || null });
         if (!allowMissingAttachments) errors.push(`Message ${message.id} has an unavailable image`);
       }
+      if (message.type === "file" && (!message.attachmentId || (attachmentIds && !attachmentIds.has(message.attachmentId)))) {
+        missingAttachments.push({ entityType: "message", entityId: message.id, attachmentId: message.attachmentId || null });
+        if (!allowMissingAttachments) errors.push(`Message ${message.id} has an unavailable file`);
+      }
     }
     for (const sticker of state.customStickers) {
       if (!sticker.id || stickerIds.has(sticker.id)) errors.push(`Duplicate or missing sticker ID: ${sticker.id || "(missing)"}`);
@@ -185,12 +189,19 @@
   function referencedAttachmentIds(state, recoveryStates = []) {
     const ids = new Set();
     const collect = value => {
-      (value.messages || []).forEach(message => { if (message.imageId) ids.add(message.imageId); });
+      (value.messages || []).forEach(message => {
+        if (message.imageId) ids.add(message.imageId);
+        if (message.attachmentId) ids.add(message.attachmentId);
+      });
       (value.customStickers || []).forEach(sticker => { if (sticker.imageId) ids.add(sticker.imageId); });
       (value.trash || []).forEach(item => {
         const payload = item.payload || {};
         if (payload.message?.imageId) ids.add(payload.message.imageId);
-        (payload.messages || []).forEach(message => { if (message.imageId) ids.add(message.imageId); });
+        if (payload.message?.attachmentId) ids.add(payload.message.attachmentId);
+        (payload.messages || []).forEach(message => {
+          if (message.imageId) ids.add(message.imageId);
+          if (message.attachmentId) ids.add(message.attachmentId);
+        });
       });
     };
     collect(state || {});

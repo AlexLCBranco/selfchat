@@ -126,10 +126,10 @@ test("permanent deletion and Empty Trash require explicit operations", () => {
 
 test("attachment references include live, Trash, stickers, and recovery states", () => {
   const ids = core.referencedAttachmentIds({
-    messages: [{ imageId: "live" }], customStickers: [{ imageId: "sticker" }],
+    messages: [{ imageId: "live" }, { attachmentId: "live-file" }], customStickers: [{ imageId: "sticker" }],
     trash: [{ payload: { message: { imageId: "trash-message" }, messages: [{ imageId: "trash-chat" }] } }]
   }, [{ messages: [{ imageId: "recovery" }] }]);
-  assert.deepEqual(ids, new Set(["live", "sticker", "trash-message", "trash-chat", "recovery"]));
+  assert.deepEqual(ids, new Set(["live", "live-file", "sticker", "trash-message", "trash-chat", "recovery"]));
 });
 
 test("targeted erasure redacts live, Trash, tombstone, draft, and chat payload state", () => {

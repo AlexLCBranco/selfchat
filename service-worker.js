@@ -1,5 +1,5 @@
-const CACHE_NAME = "selfchat-v26";
-const FILES = ["./", "index.html", "styles.css?v=20", "storage-core.js?v=6", "storage.js?v=6", "app-core.js?v=1", "app.js?v=22", "icon.svg?v=3", "manifest.webmanifest"];
+const CACHE_NAME = "selfchat-v27";
+const FILES = ["./", "index.html", "styles.css?v=21", "storage-core.js?v=6", "storage.js?v=6", "app-core.js?v=2", "app.js?v=23", "icon.svg?v=3", "manifest.webmanifest"];
 self.addEventListener("install", event => event.waitUntil(Promise.all([
   caches.open(CACHE_NAME).then(cache => cache.addAll(FILES)),
   self.skipWaiting()

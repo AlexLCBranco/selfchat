@@ -15,7 +15,8 @@
         chatId: options.getChatId(),
         text,
         createdAt: options.now(),
-        editedAt: null
+        editedAt: null,
+        ...(options.getExtra?.() || {})
       };
       options.addOptimistic(message);
       try {
@@ -64,5 +65,42 @@
     return restored;
   }
 
-  return { createTextSendController, moveMessagesToTrash, undoMessagesToTrash };
+  function messagePlainText(message, stickerLabel = "Sticker") {
+    if (!message) return "";
+    if (message.type === "image") return message.caption || message.imageName || "Image";
+    if (message.type === "file") return message.caption || message.fileName || "File";
+    if (message.type === "sticker") return stickerLabel;
+    return message.text || "";
+  }
+
+  function copySelectedText(messages, selectedIds, labelForMessage = messagePlainText) {
+    const ids = selectedIds instanceof Set ? selectedIds : new Set(selectedIds || []);
+    return [...(messages || [])]
+      .filter(message => ids.has(message.id))
+      .sort((a, b) => String(a.createdAt || "").localeCompare(String(b.createdAt || "")) || String(a.id).localeCompare(String(b.id)))
+      .map(message => labelForMessage(message))
+      .filter(Boolean)
+      .join("\n\n");
+  }
+
+  function resolveReply(state, message, labelForMessage = messagePlainText) {
+    if (!message?.replyToId) return null;
+    const live = state.messages?.find(item => item.id === message.replyToId);
+    if (live) return {
+      id: live.id,
+      chatId: live.chatId,
+      text: labelForMessage(live),
+      status: live.chatId === message.chatId ? "available" : "moved"
+    };
+    const trashed = state.trash?.find(item => item.entityType === "message" && item.entityId === message.replyToId)?.payload?.message;
+    if (trashed) return { id: trashed.id, chatId: trashed.chatId, text: labelForMessage(trashed), status: "trashed" };
+    return {
+      id: message.replyToId,
+      chatId: null,
+      text: message.replyPreview || "Original message",
+      status: "deleted"
+    };
+  }
+
+  return { createTextSendController, moveMessagesToTrash, undoMessagesToTrash, messagePlainText, copySelectedText, resolveReply };
 });
