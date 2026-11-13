@@ -38,6 +38,18 @@
     return nextTime >= currentTime ? candidate : current;
   }
 
+  function messageVersionTime(message) {
+    return [message?.movedAt, message?.editedAt, message?.updatedAt, message?.createdAt, ""]
+      .filter(Boolean)
+      .sort()
+      .at(-1) || "";
+  }
+
+  function newerMessage(current, candidate) {
+    if (!current) return candidate;
+    return messageVersionTime(candidate) > messageVersionTime(current) ? candidate : current;
+  }
+
   function mergeStates(values, preferred, fallback) {
     const sources = values.filter(Boolean).map(value => normalizeState(value, fallback));
     if (!sources.length) return normalizeState(fallback || {}, fallback);
@@ -50,7 +62,7 @@
     const deletedMessageIds = new Set();
     for (const source of sources) {
       source.chats.forEach(chat => chats.set(chat.id, newerEntity(chats.get(chat.id), chat, "updatedAt")));
-      source.messages.forEach(message => messages.set(message.id, newerEntity(messages.get(message.id), message, "editedAt")));
+      source.messages.forEach(message => messages.set(message.id, newerMessage(messages.get(message.id), message)));
       source.customStickers.forEach(sticker => { if (sticker?.id) stickers.set(sticker.id, sticker); });
       source.trash.forEach(item => {
         const current = trash.get(item.id);
@@ -210,5 +222,66 @@
     return [...selected.values()];
   }
 
-  return { UNSORTED_CHAT, normalizeState, mergeStates, migrationOperations, replayOperations, validateState, referencedAttachmentIds, redactState, recoverableAttachmentRecords };
+  function stateCounts(value) {
+    const state = value || {};
+    return {
+      chats: Array.isArray(state.chats) ? state.chats.length : 0,
+      messages: Array.isArray(state.messages) ? state.messages.length : 0,
+      images: Array.isArray(state.attachments || state.images) ? (state.attachments || state.images).length : 0,
+      trash: Array.isArray(state.trash) ? state.trash.length : 0
+    };
+  }
+
+  function backupPayload(value, attachments, exportedAt = new Date().toISOString()) {
+    const state = normalizeState(value, value);
+    return {
+      schemaVersion: 3,
+      exportedAt,
+      activeChatId: state.activeChatId,
+      chats: clone(state.chats),
+      messages: clone(state.messages),
+      customStickers: clone(state.customStickers),
+      trash: clone(state.trash),
+      deletedChatIds: clone(state.deletedChatIds),
+      deletedMessageIds: clone(state.deletedMessageIds),
+      drafts: clone(state.drafts),
+      attachments: clone(attachments || [])
+    };
+  }
+
+  function parseBackup(value, fallback) {
+    if (!value || ![undefined, 1, 2, 3].includes(value.schemaVersion) || !Array.isArray(value.chats) || !value.chats.length || !Array.isArray(value.messages)) {
+      throw new Error("Invalid SelfChat backup");
+    }
+    const attachments = Array.isArray(value.attachments) ? value.attachments : Array.isArray(value.images) ? value.images : [];
+    return {
+      state: normalizeState({
+        activeChatId: value.activeChatId || value.chats[0].id,
+        chats: value.chats,
+        messages: value.messages,
+        customStickers: value.customStickers,
+        trash: value.trash,
+        deletedChatIds: value.deletedChatIds,
+        deletedMessageIds: value.deletedMessageIds,
+        drafts: value.drafts
+      }, fallback),
+      attachments: clone(attachments),
+      schemaVersion: value.schemaVersion || 1
+    };
+  }
+
+  function newestSnapshotPerDay(snapshots, maxDays = 30) {
+    const byDay = new Map();
+    [...(snapshots || [])].sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")).forEach(snapshot => {
+      const day = (snapshot.createdAt || "").slice(0, 10);
+      if (day && !byDay.has(day)) byDay.set(day, clone(snapshot));
+    });
+    return [...byDay.values()].slice(0, maxDays);
+  }
+
+  return {
+    UNSORTED_CHAT, normalizeState, mergeStates, migrationOperations, replayOperations, validateState,
+    referencedAttachmentIds, redactState, recoverableAttachmentRecords, messageVersionTime,
+    stateCounts, backupPayload, parseBackup, newestSnapshotPerDay
+  };
 });

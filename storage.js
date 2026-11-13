@@ -2,10 +2,11 @@
   "use strict";
 
   const core = root.SelfChatStorageCore;
-  const DB_NAME = "selfchat-local-v1";
-  const DB_VERSION = 2;
-  const BACKUP_ID = "legacy-before-indexeddb-v1";
-  const STORES = ["operations", "chats", "messages", "stickers", "drafts", "attachmentRefs", "trash", "meta", "legacyBackups"];
+  const DB_NAME = "selfchat-unified-v1";
+  const DB_VERSION = 1;
+  const LEGACY_DB_NAME = "selfchat-local-v1";
+  const MAX_DAILY_SNAPSHOTS = 30;
+  const STORES = ["chats", "messages", "stickers", "drafts", "attachments", "trash", "snapshots", "meta"];
 
   function requestResult(request) {
     return new Promise((resolve, reject) => {
@@ -22,29 +23,29 @@
     });
   }
 
-  function openDatabase() {
+  function openDatabase(name = DB_NAME, version = DB_VERSION) {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open(name, version);
       request.onupgradeneeded = () => {
+        if (name !== DB_NAME) return;
         const db = request.result;
-        const transaction = request.transaction;
-        const ensureStore = (name, options) => db.objectStoreNames.contains(name) ? transaction.objectStore(name) : db.createObjectStore(name, options);
-        const ensureIndex = (store, name, keyPath) => { if (!store.indexNames.contains(name)) store.createIndex(name, keyPath, { unique: false }); };
-        const operations = ensureStore("operations", { keyPath: "id" });
-        ensureIndex(operations, "entityId", "entityId");
-        ensureIndex(operations, "createdAt", "createdAt");
+        const ensureStore = (storeName, options) => db.objectStoreNames.contains(storeName)
+          ? request.transaction.objectStore(storeName)
+          : db.createObjectStore(storeName, options);
+        const ensureIndex = (store, indexName, keyPath) => {
+          if (!store.indexNames.contains(indexName)) store.createIndex(indexName, keyPath, { unique: false });
+        };
         ensureStore("chats", { keyPath: "id" });
         const messages = ensureStore("messages", { keyPath: "id" });
         ensureIndex(messages, "chatId", "chatId");
         ensureIndex(messages, "createdAt", "createdAt");
         ensureStore("stickers", { keyPath: "id" });
         ensureStore("drafts", { keyPath: "chatId" });
-        const refs = ensureStore("attachmentRefs", { keyPath: "id" });
-        ensureIndex(refs, "imageId", "imageId");
-        ensureIndex(refs, "entityId", "entityId");
+        ensureStore("attachments", { keyPath: "id" });
         ensureStore("trash", { keyPath: "id" });
+        const snapshots = ensureStore("snapshots", { keyPath: "id" });
+        ensureIndex(snapshots, "createdAt", "createdAt");
         ensureStore("meta", { keyPath: "key" });
-        ensureStore("legacyBackups", { keyPath: "id" });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -52,75 +53,36 @@
     });
   }
 
-  function getMeta(db, key) {
+  async function databaseExists(name) {
+    if (!indexedDB.databases) return true;
+    const databases = await indexedDB.databases();
+    return databases.some(database => database.name === name);
+  }
+
+  async function openExistingDatabase(name) {
+    if (!(await databaseExists(name))) return null;
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(name);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => request.transaction.abort();
+    }).catch(() => null);
+  }
+
+  async function getMeta(db, key) {
     const transaction = db.transaction("meta", "readonly");
     return requestResult(transaction.objectStore("meta").get(key));
   }
 
-  function putAttachmentRef(stores, entityType, entity) {
-    if (!entity?.imageId) return;
-    stores.attachmentRefs.put({ id: `${entityType}:${entity.id}:${entity.imageId}`, entityType, entityId: entity.id, imageId: entity.imageId });
+  async function getAllMeta(db) {
+    const records = await requestResult(db.transaction("meta", "readonly").objectStore("meta").getAll());
+    return Object.fromEntries(records.map(record => [record.key, record.value]));
   }
 
-  function applyOperation(stores, operation) {
-    stores.operations.put(operation);
-    const payload = operation.payload || {};
-    if (operation.type === "chat.upsert") stores.chats.put(payload);
-    if (["message.upsert", "message.edit", "message.move"].includes(operation.type)) {
-      stores.messages.put(payload);
-      putAttachmentRef(stores, "message", payload);
-    }
-    if (operation.type === "sticker.upsert") {
-      stores.stickers.put(payload);
-      putAttachmentRef(stores, "sticker", payload);
-    }
-    if (operation.type === "draft.set") {
-      if (payload.text) stores.drafts.put({ chatId: payload.chatId, text: payload.text, updatedAt: operation.createdAt });
-      else stores.drafts.delete(payload.chatId);
-    }
-    if (operation.type === "message.delete") {
-      const message = payload.message;
-      stores.messages.delete(operation.entityId);
-      stores.trash.put({
-        id: `message:${operation.entityId}`, entityType: "message", entityId: operation.entityId,
-        deletedAt: operation.createdAt, operationId: operation.id,
-        payload: message ? { message, originalChatId: payload.originalChatId || message.chatId } : { originalChatId: payload.originalChatId }
-      });
-    }
-    if (operation.type === "chat.delete" && operation.entityId !== core.UNSORTED_CHAT.id) {
-      stores.chats.delete(operation.entityId);
-      (payload.messages || []).forEach(message => stores.messages.delete(message.id));
-      stores.trash.put({
-        id: `chat:${operation.entityId}`, entityType: "chat", entityId: operation.entityId,
-        deletedAt: operation.createdAt, operationId: operation.id,
-        payload: { chat: payload.chat, messages: payload.messages || [], draft: payload.draft || "" }
-      });
-    }
-    if (operation.type === "message.restore") {
-      if (payload.message) stores.messages.put({ ...payload.message, chatId: payload.targetChatId || payload.message.chatId });
-      stores.trash.delete(`message:${operation.entityId}`);
-    }
-    if (operation.type === "chat.restore") {
-      if (payload.chat) stores.chats.put(payload.chat);
-      (payload.messages || []).forEach(message => {
-        stores.messages.put(message);
-        putAttachmentRef(stores, "message", message);
-      });
-      if (payload.draft) stores.drafts.put({ chatId: operation.entityId, text: payload.draft, updatedAt: operation.createdAt });
-      stores.trash.delete(`chat:${operation.entityId}`);
-    }
-    if (operation.type === "message.purge") stores.trash.delete(`message:${operation.entityId}`);
-    if (operation.type === "chat.purge") stores.trash.delete(`chat:${operation.entityId}`);
-    if (operation.type === "trash.empty") stores.trash.clear();
-    if (operation.type === "trash.import") {
-      const item = payload.item;
-      if (item?.id) stores.trash.put(item);
-    }
-  }
-
-  async function loadState(db) {
-    const transaction = db.transaction(["chats", "messages", "stickers", "drafts", "trash", "meta"], "readonly");
-    const stores = Object.fromEntries(["chats", "messages", "stickers", "drafts", "trash", "meta"].map(name => [name, transaction.objectStore(name)]));
+  async function loadState(db, fallback) {
+    const names = ["chats", "messages", "stickers", "drafts", "trash", "meta"];
+    const transaction = db.transaction(names, "readonly");
+    const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
     const [chats, messages, stickers, drafts, trash, active] = await Promise.all([
       requestResult(stores.chats.getAll()), requestResult(stores.messages.getAll()), requestResult(stores.stickers.getAll()),
       requestResult(stores.drafts.getAll()), requestResult(stores.trash.getAll()), requestResult(stores.meta.get("activeChatId"))
@@ -134,149 +96,246 @@
       trash,
       deletedChatIds: trash.filter(item => item.entityType === "chat").map(item => item.entityId),
       deletedMessageIds: trash.filter(item => item.entityType === "message").map(item => item.entityId)
-    });
+    }, fallback);
   }
 
-  async function createAndVerifyBackup(db, adapters) {
-    const existing = await (async () => {
-      const transaction = db.transaction("legacyBackups", "readonly");
-      return requestResult(transaction.objectStore("legacyBackups").get(BACKUP_ID));
-    })();
-    if (existing?.verified) return existing;
-    const images = await adapters.getAllImages();
-    const snapshots = await adapters.getRecoverySnapshots();
-    const record = {
-      id: BACKUP_ID,
-      createdAt: new Date().toISOString(),
-      storage: {
-        primary: localStorage.getItem(adapters.storageKey),
-        recovery: localStorage.getItem(adapters.recoveryKey)
-      },
-      images,
-      recoverySnapshots: snapshots,
-      verified: false
-    };
-    let transaction = db.transaction("legacyBackups", "readwrite");
-    transaction.objectStore("legacyBackups").put(record);
-    await transactionDone(transaction);
-    transaction = db.transaction("legacyBackups", "readonly");
-    const stored = await requestResult(transaction.objectStore("legacyBackups").get(BACKUP_ID));
-    await transactionDone(transaction);
-    const valid = stored && stored.storage.primary === record.storage.primary && stored.storage.recovery === record.storage.recovery
-      && stored.images.length === images.length && stored.recoverySnapshots.length === snapshots.length
-      && stored.images.every((image, index) => image.id === images[index].id && image.blob?.size === images[index].blob?.size);
-    if (!valid) throw new Error("Legacy safety backup verification failed");
-    stored.verified = true;
-    transaction = db.transaction("legacyBackups", "readwrite");
-    transaction.objectStore("legacyBackups").put(stored);
-    await transactionDone(transaction);
-    return stored;
-  }
-
-  async function migrate(db, legacyState, adapters) {
-    const backup = await createAndVerifyBackup(db, adapters);
-    const attachmentIds = new Set(backup.images.map(image => image.id));
-    const state = core.normalizeState(legacyState, adapters.defaultState);
-    const validation = core.validateState(state, attachmentIds, { allowMissingAttachments: true });
-    if (!validation.ok) throw new Error(`Legacy validation failed: ${validation.errors.join("; ")}`);
-    const operations = core.migrationOperations(state);
-    const transaction = db.transaction(STORES.filter(name => name !== "legacyBackups"), "readwrite");
-    const stores = Object.fromEntries(STORES.filter(name => name !== "legacyBackups").map(name => [name, transaction.objectStore(name)]));
-    ["operations", "chats", "messages", "stickers", "drafts", "attachmentRefs", "trash", "meta"].forEach(name => stores[name].clear());
-    operations.forEach(operation => applyOperation(stores, operation));
-    stores.meta.put({ key: "activeChatId", value: state.activeChatId });
-    stores.meta.put({ key: "migrationStatus", value: "projected", updatedAt: new Date().toISOString() });
-    await transactionDone(transaction);
-    const projected = await loadState(db);
-    const projectedValidation = core.validateState(projected, attachmentIds, { allowMissingAttachments: true });
-    if (!projectedValidation.ok || projectedValidation.counts.chats !== validation.counts.chats || projectedValidation.counts.messages !== validation.counts.messages || projectedValidation.counts.stickers !== validation.counts.stickers) {
-      throw new Error(`Migrated projection validation failed: ${projectedValidation.errors.join("; ")}`);
+  async function readV092Projection(fallback) {
+    const db = await openExistingDatabase(LEGACY_DB_NAME);
+    if (!db) return null;
+    try {
+      const required = ["chats", "messages", "stickers", "drafts", "trash", "meta"];
+      if (!required.every(name => db.objectStoreNames.contains(name))) return null;
+      const active = await getMeta(db, "activeSchema");
+      if (active?.value !== 1) return null;
+      const state = await loadState(db, fallback);
+      let backupImages = [];
+      if (db.objectStoreNames.contains("legacyBackups")) {
+        const backups = await requestResult(db.transaction("legacyBackups", "readonly").objectStore("legacyBackups").getAll());
+        backupImages = backups.filter(backup => backup?.verified).flatMap(backup => backup.images || []);
+      }
+      return { state, backupImages };
+    } finally {
+      db.close();
     }
-    const opTransaction = db.transaction("operations", "readonly");
-    const operationCount = await requestResult(opTransaction.objectStore("operations").count());
-    if (operationCount !== operations.length) throw new Error("Migrated operation count did not match");
-    const activation = db.transaction("meta", "readwrite");
-    activation.objectStore("meta").put({ key: "activeSchema", value: 1, activatedAt: new Date().toISOString(), backupId: BACKUP_ID });
-    activation.objectStore("meta").put({ key: "migrationStatus", value: "active", updatedAt: new Date().toISOString() });
-    await transactionDone(activation);
-    return projected;
+  }
+
+  function putState(stores, state) {
+    state.chats.forEach(chat => stores.chats.put(chat));
+    state.messages.forEach(message => stores.messages.put(message));
+    state.customStickers.forEach(sticker => stores.stickers.put(sticker));
+    Object.entries(state.drafts).filter(([, text]) => text).forEach(([chatId, text]) => stores.drafts.put({ chatId, text, updatedAt: new Date().toISOString() }));
+    state.trash.forEach(item => stores.trash.put(item));
+    stores.meta.put({ key: "activeChatId", value: state.activeChatId });
+  }
+
+  async function migrate(db, adapters) {
+    const legacyLocal = core.normalizeState(adapters.loadLegacyState(), adapters.defaultState);
+    const legacyIndexed = await readV092Projection(adapters.defaultState);
+    const source = legacyIndexed ? core.mergeStates([legacyLocal, legacyIndexed.state], legacyIndexed.state, adapters.defaultState) : legacyLocal;
+    const currentAttachments = await adapters.getAllImages();
+    const attachmentMap = new Map((legacyIndexed?.backupImages || []).map(record => [record.id, record]));
+    currentAttachments.forEach(record => {
+      const backup = attachmentMap.get(record.id);
+      if (!backup?.blob?.size || record?.blob?.size) attachmentMap.set(record.id, record);
+    });
+    const attachments = [...attachmentMap.values()];
+    const legacySnapshots = await adapters.getRecoverySnapshots();
+    const sourceValidation = core.validateState(source, new Set(attachments.map(record => record.id)), { allowMissingAttachments: true });
+    if (!sourceValidation.ok) throw Object.assign(new Error(`v0.9.2 validation failed: ${sourceValidation.errors.join("; ")}`), { legacyState: source });
+    const snapshots = core.newestSnapshotPerDay(legacySnapshots, MAX_DAILY_SNAPSHOTS);
+    try {
+      const transaction = db.transaction(STORES, "readwrite");
+      const stores = Object.fromEntries(STORES.map(name => [name, transaction.objectStore(name)]));
+      STORES.filter(name => name !== "meta").forEach(name => stores[name].clear());
+      putState(stores, source);
+      attachments.forEach(record => stores.attachments.put(record));
+      snapshots.forEach(snapshot => stores.snapshots.put(snapshot));
+      stores.meta.put({ key: "migrationStatus", value: "verifying" });
+      await transactionDone(transaction);
+      const [projected, projectedAttachments, projectedTrash] = await Promise.all([
+        loadState(db, adapters.defaultState),
+        requestResult(db.transaction("attachments", "readonly").objectStore("attachments").getAll()),
+        requestResult(db.transaction("trash", "readonly").objectStore("trash").getAll())
+      ]);
+      const before = { ...core.stateCounts(source), images: attachments.length };
+      const after = { ...core.stateCounts(projected), images: projectedAttachments.length, trash: projectedTrash.length };
+      for (const key of ["chats", "messages", "images", "trash"]) {
+        if (before[key] !== after[key]) throw new Error(`Migration count mismatch for ${key}: ${before[key]} before, ${after[key]} after`);
+      }
+      if (adapters.verifyMigration) await adapters.verifyMigration({ source, projected, attachments: projectedAttachments });
+      const activation = db.transaction("meta", "readwrite");
+      const meta = activation.objectStore("meta");
+      meta.put({ key: "activeSchema", value: 1 });
+      meta.put({ key: "migrationStatus", value: "active" });
+      meta.put({ key: "migrationCounts", value: after });
+      meta.put({ key: "migratedAt", value: new Date().toISOString() });
+      await transactionDone(activation);
+      return source;
+    } catch (error) {
+      error.legacyState = source;
+      try {
+        const transaction = db.transaction("meta", "readwrite");
+        transaction.objectStore("meta").put({ key: "migrationStatus", value: "failed", error: error.message, updatedAt: new Date().toISOString() });
+        await transactionDone(transaction);
+      } catch (_) {}
+      throw error;
+    }
+  }
+
+  function applyDiff(stores, diff) {
+    (diff.chatsPut || []).forEach(record => stores.chats.put(record));
+    (diff.chatsDelete || []).forEach(id => stores.chats.delete(id));
+    (diff.messagesPut || []).forEach(record => stores.messages.put(record));
+    (diff.messagesDelete || []).forEach(id => stores.messages.delete(id));
+    (diff.stickersPut || []).forEach(record => stores.stickers.put(record));
+    (diff.stickersDelete || []).forEach(id => stores.stickers.delete(id));
+    (diff.draftsPut || []).forEach(record => stores.drafts.put(record));
+    (diff.draftsDelete || []).forEach(id => stores.drafts.delete(id));
+    (diff.trashPut || []).forEach(record => stores.trash.put(record));
+    (diff.trashDelete || []).forEach(id => stores.trash.delete(id));
+    (diff.attachmentsPut || []).forEach(record => stores.attachments.put(record));
+    (diff.attachmentsDelete || []).forEach(id => stores.attachments.delete(id));
+    if (diff.activeChatId) stores.meta.put({ key: "activeChatId", value: diff.activeChatId });
+  }
+
+  async function pruneSnapshots(db) {
+    const snapshots = await requestResult(db.transaction("snapshots", "readonly").objectStore("snapshots").getAll());
+    const keep = new Set(core.newestSnapshotPerDay(snapshots, MAX_DAILY_SNAPSHOTS).map(snapshot => snapshot.id));
+    const remove = snapshots.filter(snapshot => !keep.has(snapshot.id));
+    if (!remove.length) return;
+    const deletion = db.transaction("snapshots", "readwrite");
+    remove.forEach(snapshot => deletion.objectStore("snapshots").delete(snapshot.id));
+    await transactionDone(deletion);
+  }
+
+  async function purgeLegacyDatabase(targets, fallback) {
+    const db = await openExistingDatabase(LEGACY_DB_NAME);
+    if (!db) return;
+    try {
+      const available = name => db.objectStoreNames.contains(name);
+      let backups = [];
+      if (available("legacyBackups")) backups = await requestResult(db.transaction("legacyBackups", "readonly").objectStore("legacyBackups").getAll());
+      const names = ["operations", "chats", "messages", "drafts", "attachmentRefs", "trash", "legacyBackups"].filter(available);
+      if (!names.length) return;
+      const transaction = db.transaction(names, "readwrite");
+      const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
+      targets.chatIds.forEach(id => { stores.chats?.delete(id); stores.drafts?.delete(id); });
+      targets.messageIds.forEach(id => stores.messages?.delete(id));
+      for (const name of ["operations", "attachmentRefs", "trash"]) {
+        if (!stores[name]) continue;
+        stores[name].openCursor().onsuccess = event => {
+          const cursor = event.target.result;
+          if (!cursor) return;
+          if (targets.entityIds.has(cursor.value.entityId)) cursor.delete();
+          cursor.continue();
+        };
+      }
+      backups.forEach(backup => {
+        const next = { ...backup };
+        const retainedStates = [];
+        for (const field of ["primary", "recovery"]) {
+          try {
+            const parsed = JSON.parse(next.storage?.[field]);
+            if (parsed) {
+              const redacted = core.redactState(parsed, targets, fallback);
+              retainedStates.push(redacted);
+              next.storage[field] = JSON.stringify(redacted);
+            }
+          } catch (_) {}
+        }
+        next.recoverySnapshots = (next.recoverySnapshots || []).map(snapshot => ({ ...snapshot, state: core.redactState(snapshot.state, targets, fallback) }));
+        retainedStates.push(...next.recoverySnapshots.map(snapshot => snapshot.state));
+        const retainedImageIds = core.referencedAttachmentIds(retainedStates.shift() || {}, retainedStates);
+        next.images = (next.images || []).filter(image => !targets.imageIds.has(image.id) || retainedImageIds.has(image.id));
+        stores.legacyBackups.put(next);
+      });
+      await transactionDone(transaction);
+    } finally {
+      db.close();
+    }
   }
 
   async function open(adapters) {
     const db = await openDatabase();
-    const active = await getMeta(db, "activeSchema");
-    const initialState = active?.value === 1 ? await loadState(db) : await migrate(db, adapters.loadLegacyState(), adapters);
-
-    return {
+    let initialState;
+    try {
+      const active = await getMeta(db, "activeSchema");
+      initialState = active?.value === 1 ? await loadState(db, adapters.defaultState) : await migrate(db, adapters);
+    } catch (error) {
+      db.close();
+      throw error;
+    }
+    const metadata = await getAllMeta(db);
+    const repository = {
       db,
       initialState,
-      async load() { return loadState(db); },
-      async commit(operations, activeChatId) {
-        const names = ["operations", "chats", "messages", "stickers", "drafts", "attachmentRefs", "trash", "meta"];
+      metadata,
+      async load() { return loadState(db, adapters.defaultState); },
+      async commit(diff, { significant = true, snapshotState = null } = {}) {
+        const today = new Date().toISOString().slice(0, 10);
+        const createDailySnapshot = significant && snapshotState && metadata.lastSnapshotDay !== today;
+        const transaction = db.transaction(STORES, "readwrite");
+        const stores = Object.fromEntries(STORES.map(name => [name, transaction.objectStore(name)]));
+        if (createDailySnapshot) {
+          const createdAt = new Date().toISOString();
+          stores.snapshots.put({ id: `daily-${today}`, createdAt, label: "Daily recovery point", messageCount: snapshotState.messages.length, chatCount: snapshotState.chats.length, state: core.normalizeState(snapshotState, adapters.defaultState) });
+          stores.meta.put({ key: "lastSnapshotDay", value: today });
+        }
+        applyDiff(stores, diff);
+        await transactionDone(transaction);
+        if (createDailySnapshot) {
+          metadata.lastSnapshotDay = today;
+          await pruneSnapshots(db);
+        }
+      },
+      async replaceState(value) {
+        const next = core.normalizeState(value, adapters.defaultState);
+        const names = ["chats", "messages", "stickers", "drafts", "trash", "meta"];
         const transaction = db.transaction(names, "readwrite");
         const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
-        operations.forEach(operation => applyOperation(stores, operation));
-        if (activeChatId) stores.meta.put({ key: "activeChatId", value: activeChatId });
+        ["chats", "messages", "stickers", "drafts", "trash"].forEach(name => stores[name].clear());
+        putState(stores, next);
         await transactionDone(transaction);
-        return loadState(db);
       },
-      async setActiveChat(activeChatId) {
+      async getAttachment(id) { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").get(id)); },
+      async getAllAttachments() { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").getAll()); },
+      async listSnapshots() { return requestResult(db.transaction("snapshots", "readonly").objectStore("snapshots").getAll()); },
+      async getMeta(key) { return (await getMeta(db, key))?.value; },
+      async setMeta(key, value) {
         const transaction = db.transaction("meta", "readwrite");
-        transaction.objectStore("meta").put({ key: "activeChatId", value: activeChatId });
+        transaction.objectStore("meta").put({ key, value, updatedAt: new Date().toISOString() });
         await transactionDone(transaction);
+        metadata[key] = value;
       },
-      async replaceState(value, restoreOperation) {
-        const nextState = core.normalizeState(value, adapters.defaultState);
-        const names = ["operations", "chats", "messages", "stickers", "drafts", "attachmentRefs", "trash", "meta"];
+      async purgeEveryCopy(targets, currentState) {
+        const snapshots = await repository.listSnapshots();
+        const redactedSnapshots = snapshots.map(snapshot => {
+          const nextState = core.redactState(snapshot.state, targets, adapters.defaultState);
+          return { ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length };
+        });
+        const referenced = core.referencedAttachmentIds(currentState, redactedSnapshots.map(snapshot => snapshot.state));
+        const names = ["chats", "messages", "drafts", "trash", "snapshots", "attachments"];
         const transaction = db.transaction(names, "readwrite");
         const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
-        ["chats", "messages", "stickers", "drafts", "attachmentRefs", "trash"].forEach(name => stores[name].clear());
-        nextState.chats.forEach(chat => stores.chats.put(chat));
-        nextState.messages.forEach(message => {
-          stores.messages.put(message);
-          putAttachmentRef(stores, "message", message);
-        });
-        nextState.customStickers.forEach(sticker => {
-          stores.stickers.put(sticker);
-          putAttachmentRef(stores, "sticker", sticker);
-        });
-        Object.entries(nextState.drafts).filter(([, text]) => text).forEach(([chatId, text]) => stores.drafts.put({ chatId, text, updatedAt: restoreOperation.createdAt }));
-        nextState.trash.forEach(item => stores.trash.put(item));
-        stores.meta.put({ key: "activeChatId", value: nextState.activeChatId });
-        stores.operations.put(restoreOperation);
-        await transactionDone(transaction);
-        return loadState(db);
-      },
-      async purgeHistory(entityIds) {
-        const ids = new Set(entityIds);
-        const transaction = db.transaction(["operations", "attachmentRefs", "legacyBackups"], "readwrite");
-        const operations = transaction.objectStore("operations");
-        const refs = transaction.objectStore("attachmentRefs");
-        operations.openCursor().onsuccess = event => {
+        targets.chatIds.forEach(id => { stores.chats.delete(id); stores.drafts.delete(id); });
+        targets.messageIds.forEach(id => stores.messages.delete(id));
+        stores.trash.openCursor().onsuccess = event => {
           const cursor = event.target.result;
           if (!cursor) return;
-          if (ids.has(cursor.value.entityId)) cursor.delete();
+          if (targets.entityIds.has(cursor.value.entityId)) cursor.delete();
           cursor.continue();
         };
-        refs.openCursor().onsuccess = event => {
-          const cursor = event.target.result;
-          if (!cursor) return;
-          if (ids.has(cursor.value.entityId)) cursor.delete();
-          cursor.continue();
-        };
-        transaction.objectStore("legacyBackups").clear();
+        redactedSnapshots.forEach(snapshot => stores.snapshots.put(snapshot));
+        [...targets.imageIds].filter(id => !referenced.has(id)).forEach(id => stores.attachments.delete(id));
         await transactionDone(transaction);
+        await purgeLegacyDatabase(targets, adapters.defaultState);
       },
-      async getLegacyBackup() {
-        const transaction = db.transaction("legacyBackups", "readonly");
-        return requestResult(transaction.objectStore("legacyBackups").get(BACKUP_ID));
-      },
-      async operationCount() {
-        const transaction = db.transaction("operations", "readonly");
-        return requestResult(transaction.objectStore("operations").count());
-      }
+      close() { db.close(); }
     };
+    return repository;
   }
 
-  root.SelfChatStorage = { open, DB_NAME, DB_VERSION, BACKUP_ID };
+  const api = { open, DB_NAME, DB_VERSION, LEGACY_DB_NAME, MAX_DAILY_SNAPSHOTS };
+  root.SelfChatStorage = api;
+  if (typeof module === "object" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

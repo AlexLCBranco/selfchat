@@ -22,19 +22,19 @@ The domain is attached to the project and follows future production deployments 
 
 ## Data and privacy
 
-- Chats, messages, drafts, attachment references, and an append-only change history are stored transactionally in browser IndexedDB.
-- The legacy `selfchat-data-v1` local-storage value, image database, and recovery snapshots remain available as rollback sources after migration.
-- On startup, missing or corrupt attachment blobs are repaired from the verified on-device migration backup when a matching copy is available.
-- Missing attachment blobs do not block structurally valid message metadata from entering transactional storage; repair runs immediately after activation.
+- Chats, messages, drafts, Trash, recovery points, images, and attachments are stored in one transactional IndexedDB database.
+- On the first run of this storage version, v0.9.2 data is copied and count-verified before the unified database activates. The old sources remain in place for this version.
+- SelfChat asks the browser for persistent storage. The result is shown in the always-visible data status panel.
 - Message content is not sent to Vercel or another backend.
-- Each browser profile and origin has its own separate data.
+- Each browser profile and origin has its own separate data. In particular, `http://127.0.0.1:47832` and `https://selfchat-home.vercel.app` are separate datasets; opening one does not show or change messages stored by the other.
+- A supported browser can remember a user-chosen folder and write a full automatic backup there after significant changes and at least daily. The data status panel warns when folder backup is unavailable.
 - Use the in-app export command to create a JSON backup.
 - Import and recovery restore merge by stable IDs and never delete data merely because it is absent from the incoming backup.
 - Message options can move one or several selected messages to another chat, including the permanent Unsorted chat, without changing message IDs or dates.
 - Sidebar search finds chats and message content locally, while in-chat search navigates matches in context.
 - Deleting a message or chat moves it to Data settings → Trash. Permanent erasure removes matching browser-local history, recovery, migration, and unreferenced attachment copies after an irreversible-action confirmation.
 - Restored messages return to their original chat when it exists, otherwise to Unsorted. Local attachment bytes remain retained while live content, Trash, stickers, recovery points, or safety backups can still reference them.
-- Recovery points are point-in-time restores. SelfChat saves the current state as a new recovery point before replacing the active local projection.
+- Recovery points are point-in-time restores. SelfChat keeps at most one point per day for 30 days.
 
 ## Working with Codex
 

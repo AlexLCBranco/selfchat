@@ -7,7 +7,7 @@ const IMAGE_DB_NAME = "selfchat-images-v1";
 const IMAGE_STORE = "images";
 const RECOVERY_DB_NAME = "selfchat-snapshots-v1";
 const RECOVERY_STORE = "snapshots";
-const MAX_RECOVERY_SNAPSHOTS = 25;
+const MAX_RECOVERY_SNAPSHOTS = 30;
 const EMOJIS = ["💬", "🏀", "⚽", "🤖", "💻", "🎬", "🎮", "🎵", "📚", "💡", "🧠", "🔥", "🧾", "👀", "🗑️", "🌍"];
 const STICKERS = [
   { id: "thumbs-up", emoji: "👍", label: "Thumbs up", tone: "mint" },
@@ -64,7 +64,9 @@ const elements = {
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
   moveDialog: $("#moveMessagesDialog"), moveForm: $("#moveMessagesForm"), moveTitle: $("#moveMessagesTitle"), moveDestination: $("#moveDestinationSelect"),
   imageViewerDialog: $("#imageViewerDialog"), imageViewerImage: $("#imageViewerImage"), imageViewerTitle: $("#imageViewerTitle"),
-  imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption")
+  imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption"),
+  originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
+  exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton")
 };
 
 let state = loadLegacyState();
@@ -88,11 +90,14 @@ let viewerLoadToken = 0;
 const tabId = uid();
 const tabChannel = "BroadcastChannel" in window ? new BroadcastChannel(TAB_CHANNEL_NAME) : null;
 let tabIsBlocked = false;
-let recoverySnapshotTimer = null;
 let lastRecoverySignature = null;
 let messageSearchIndex = 0;
 let focusedMessageId = null;
 let recoveryPreviewSnapshot = null;
+let storagePersisted = null;
+let storageWarning = "";
+let automaticBackupTimer = null;
+let automaticBackupRunning = false;
 
 function activeTabId() {
   try {
@@ -205,46 +210,54 @@ function recoverySignature(value) {
   });
 }
 
-function operation(type, entityId, entityType, payload, source = "local") {
-  return { id: uid(), type, entityId, entityType, payload: structuredClone(payload), source, createdAt: new Date().toISOString() };
+function changedRecords(before, after, key = "id") {
+  const previous = new Map(before.map(item => [item[key], item]));
+  const next = new Map(after.map(item => [item[key], item]));
+  return {
+    put: after.filter(item => JSON.stringify(item) !== JSON.stringify(previous.get(item[key]))),
+    remove: before.filter(item => !next.has(item[key])).map(item => item[key])
+  };
 }
 
-function stateOperations(before, after, source = "local") {
-  const operations = [];
-  const beforeChats = new Map(before.chats.map(item => [item.id, item]));
-  const afterChats = new Map(after.chats.map(item => [item.id, item]));
-  const beforeMessages = new Map(before.messages.map(item => [item.id, item]));
-  const afterMessages = new Map(after.messages.map(item => [item.id, item]));
-  const beforeStickers = new Map(before.customStickers.map(item => [item.id, item]));
-  const beforeTrash = new Map((before.trash || []).map(item => [item.id, item]));
-  const deletedChatIds = new Set(before.chats.filter(chat => !afterChats.has(chat.id)).map(chat => chat.id));
-  for (const chat of after.chats) if (JSON.stringify(chat) !== JSON.stringify(beforeChats.get(chat.id))) operations.push(operation("chat.upsert", chat.id, "chat", chat, source));
-  for (const chat of before.chats) if (!afterChats.has(chat.id) && chat.id !== "unsorted") operations.push(operation("chat.delete", chat.id, "chat", {
-    chat, messages: before.messages.filter(message => message.chatId === chat.id), draft: before.drafts?.[chat.id] || ""
-  }, source));
-  for (const message of after.messages) {
-    const previous = beforeMessages.get(message.id);
-    if (JSON.stringify(message) === JSON.stringify(previous)) continue;
-    const type = previous?.chatId !== message.chatId && previous ? "message.move" : previous ? "message.edit" : "message.upsert";
-    operations.push(operation(type, message.id, "message", message, source));
-  }
-  for (const message of before.messages) if (!afterMessages.has(message.id) && !deletedChatIds.has(message.chatId)) operations.push(operation("message.delete", message.id, "message", { message, originalChatId: message.chatId }, source));
-  for (const sticker of after.customStickers) if (JSON.stringify(sticker) !== JSON.stringify(beforeStickers.get(sticker.id))) operations.push(operation("sticker.upsert", sticker.id, "sticker", sticker, source));
-  for (const item of after.trash || []) if (!beforeTrash.has(item.id)) operations.push(operation("trash.import", item.entityId, item.entityType, { item }, source));
+function stateDiff(before, after, attachmentsPut = [], attachmentsDelete = []) {
+  const chats = changedRecords(before.chats, after.chats);
+  const messages = changedRecords(before.messages, after.messages);
+  const stickers = changedRecords(before.customStickers, after.customStickers);
+  const trash = changedRecords(before.trash || [], after.trash || []);
   const draftIds = new Set([...Object.keys(before.drafts || {}), ...Object.keys(after.drafts || {})]);
+  const draftsPut = [];
+  const draftsDelete = [];
   draftIds.forEach(chatId => {
-    if ((before.drafts?.[chatId] || "") !== (after.drafts?.[chatId] || "")) operations.push(operation("draft.set", chatId, "draft", { chatId, text: after.drafts?.[chatId] || "" }, source));
+    const previous = before.drafts?.[chatId] || "";
+    const next = after.drafts?.[chatId] || "";
+    if (previous === next) return;
+    if (next) draftsPut.push({ chatId, text: next, updatedAt: new Date().toISOString() });
+    else draftsDelete.push(chatId);
   });
-  return operations;
+  return {
+    chatsPut: chats.put, chatsDelete: chats.remove,
+    messagesPut: messages.put, messagesDelete: messages.remove,
+    stickersPut: stickers.put, stickersDelete: stickers.remove,
+    draftsPut, draftsDelete,
+    trashPut: trash.put, trashDelete: trash.remove,
+    attachmentsPut, attachmentsDelete,
+    activeChatId: after.activeChatId
+  };
 }
 
-async function saveState({ snapshot = true, source = "local" } = {}) {
+function diffHasContent(diff) {
+  return Object.entries(diff).some(([key, value]) => key !== "activeChatId" && Array.isArray(value) && value.length);
+}
+
+async function saveState({ significant = true, attachmentsPut = [], attachmentsDelete = [] } = {}) {
   state = normalizeState(state);
   if (repository) {
-    const operations = stateOperations(persistedState, state, source);
+    const before = structuredClone(persistedState);
+    const diff = stateDiff(before, state, attachmentsPut, attachmentsDelete);
     try {
-      if (operations.length) state = await repository.commit(operations, state.activeChatId);
-      else if (state.activeChatId !== persistedState.activeChatId) await repository.setActiveChat(state.activeChatId);
+      if (diffHasContent(diff) || state.activeChatId !== persistedState.activeChatId) {
+        await repository.commit(diff, { significant, snapshotState: before });
+      }
     } catch (error) {
       state = structuredClone(persistedState);
       throw error;
@@ -255,15 +268,7 @@ async function saveState({ snapshot = true, source = "local" } = {}) {
     try { localStorage.setItem(RECOVERY_KEY, serialized); } catch (_) {}
     localStorage.setItem(STORAGE_KEY, serialized);
   }
-  if (snapshot) queueRecoverySnapshot();
-}
-
-async function commitExplicit(operations, { snapshot = true } = {}) {
-  if (!repository) throw new Error("Transactional storage is unavailable");
-  state = await repository.commit(operations, state.activeChatId);
-  persistedState = structuredClone(state);
-  if (snapshot) queueRecoverySnapshot();
-  return state;
+  if (significant) queueAutomaticBackup();
 }
 
 async function initializeStorage() {
@@ -279,27 +284,30 @@ async function initializeStorage() {
     state = repository.initialState || await repository.load();
     persistedState = structuredClone(state);
     storageMode = "indexeddb";
-    const attachmentRepair = await repairMissingAttachments();
-    if (attachmentRepair.recovered) showToast(`Recovered ${attachmentRepair.recovered} local image${attachmentRepair.recovered === 1 ? "" : "s"} from the migration backup`, 5000);
-    else if (attachmentRepair.missing) showToast(`${attachmentRepair.missing} local image${attachmentRepair.missing === 1 ? " is" : "s are"} unavailable; import a backup to restore them`, 6000);
+    storageWarning = "";
     const buffers = readDraftBuffers();
     if (Object.keys(buffers).length) {
       Object.entries(buffers).forEach(([chatId, buffer]) => {
         if (state.chats.some(chat => chat.id === chatId) && typeof buffer?.text === "string") state.drafts[chatId] = buffer.text;
       });
-      await saveState({ snapshot: false, source: "draft-recovery" });
+      await saveState({ significant: false });
       Object.entries(buffers).forEach(([chatId, buffer]) => clearDraftBuffer(chatId, buffer.text));
     }
+    storagePersisted = navigator.storage?.persist ? await navigator.storage.persist().catch(() => false) : false;
+    await refreshDataStatus();
+    await runAutomaticBackup("startup");
   } catch (error) {
     console.error("IndexedDB migration unavailable; continuing with legacy storage", error);
     repository = null;
     storageMode = "legacy";
-    state = loadLegacyState();
+    state = error.legacyState || loadLegacyState();
     persistedState = structuredClone(state);
     Object.entries(readDraftBuffers()).forEach(([chatId, buffer]) => {
       if (state.chats.some(chat => chat.id === chatId) && typeof buffer?.text === "string") state.drafts[chatId] = buffer.text;
     });
-    showToast("Using legacy local storage; migration will retry next time", 5000);
+    storageWarning = `Unified storage migration failed: ${error.message}. v0.9.2 data remains active and will retry next time.`;
+    await refreshDataStatus();
+    showToast("Migration failed; your v0.9.2 data is still active", 6000);
   }
 }
 
@@ -332,10 +340,12 @@ async function withRecoveryStore(mode, operation) {
 }
 
 function getRecoverySnapshots() {
+  if (repository) return repository.listSnapshots();
   return withRecoveryStore("readonly", store => store.getAll());
 }
 
 async function createRecoverySnapshot(label = "Automatic recovery point", value = state, { force = false } = {}) {
+  if (repository) return;
   const snapshotState = normalizeState(value);
   const signature = recoverySignature(snapshotState);
   if (!force && signature === lastRecoverySignature) return;
@@ -357,13 +367,6 @@ async function createRecoverySnapshot(label = "Automatic recovery point", value 
       .forEach(snapshot => store.delete(snapshot.id));
   });
   lastRecoverySignature = signature;
-}
-
-function queueRecoverySnapshot() {
-  clearTimeout(recoverySnapshotTimer);
-  recoverySnapshotTimer = setTimeout(() => {
-    createRecoverySnapshot().catch(() => {});
-  }, 250);
 }
 
 function openImageDb() {
@@ -395,52 +398,30 @@ async function withImageStore(mode, operation) {
 }
 
 function putImage(record) {
+  if (repository) return repository.commit({ attachmentsPut: [record] }, { significant: false });
   return withImageStore("readwrite", store => store.put(record));
 }
 
 function getImage(id) {
+  if (repository) return repository.getAttachment(id);
   return withImageStore("readonly", store => store.get(id));
 }
 
 function getAllImages() {
+  if (repository) return repository.getAllAttachments();
   return withImageStore("readonly", store => store.getAll());
 }
 
 function deleteImages(ids) {
   if (!ids.length) return Promise.resolve();
+  if (repository) return repository.commit({ attachmentsDelete: ids }, { significant: false });
   return withImageStore("readwrite", store => ids.forEach(id => store.delete(id)));
-}
-
-function replaceImages(records) {
-  return withImageStore("readwrite", store => {
-    store.clear();
-    records.forEach(record => store.put(record));
-  });
 }
 
 function addImages(records) {
   if (!records.length) return Promise.resolve();
+  if (repository) return repository.commit({ attachmentsPut: records }, { significant: false });
   return withImageStore("readwrite", store => records.forEach(record => store.put(record)));
-}
-
-async function repairMissingAttachments() {
-  if (!repository?.getLegacyBackup) return { recovered: 0, missing: 0 };
-  const [currentRecords, backup, snapshots] = await Promise.all([
-    getAllImages().catch(() => []),
-    repository.getLegacyBackup().catch(() => null),
-    getRecoverySnapshots().catch(() => [])
-  ]);
-  const requiredIds = SelfChatStorageCore.referencedAttachmentIds(state, snapshots.map(snapshot => snapshot.state));
-  const recoverable = backup?.verified
-    ? SelfChatStorageCore.recoverableAttachmentRecords(requiredIds, currentRecords, backup.images)
-    : [];
-  if (recoverable.length) await addImages(recoverable);
-  const verifiedRecords = recoverable.length ? await getAllImages().catch(() => currentRecords) : currentRecords;
-  const usableIds = new Set(verifiedRecords.filter(record => record?.blob?.size > 0).map(record => record.id));
-  return {
-    recovered: recoverable.filter(record => usableIds.has(record.id)).length,
-    missing: [...requiredIds].filter(id => !usableIds.has(id)).length
-  };
 }
 
 function blobToDataUrl(blob) {
@@ -457,6 +438,76 @@ function dataUrlToBlob(value) {
   if (!match) throw new Error("Invalid image data");
   const bytes = Uint8Array.from(atob(match[2]), character => character.charCodeAt(0));
   return new Blob([bytes], { type: match[1] });
+}
+
+function formatStatusTime(value) {
+  if (!value) return "Never";
+  return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+}
+
+async function buildBackupPayload() {
+  const records = await getAllImages();
+  const referenced = SelfChatStorageCore.referencedAttachmentIds(state);
+  const attachments = await Promise.all(records.filter(record => referenced.has(record.id)).map(async record => ({
+    id: record.id,
+    name: record.name || "Attachment",
+    type: record.blob?.type || "application/octet-stream",
+    data: await blobToDataUrl(record.blob)
+  })));
+  return SelfChatStorageCore.backupPayload(state, attachments);
+}
+
+async function refreshDataStatus() {
+  const originLabel = location.origin.includes("127.0.0.1") || location.origin.includes("localhost") ? "Local launcher" : "Hosted site";
+  elements.originStatus.textContent = `Origin: ${originLabel} (${location.origin}) · separate dataset`;
+  elements.persistenceStatus.textContent = `Storage persisted: ${storagePersisted === null ? "checking…" : storagePersisted ? "Yes" : "No"}`;
+  const lastAutomaticBackup = repository ? await repository.getMeta("lastAutomaticBackup").catch(() => null) : null;
+  const lastExport = repository ? await repository.getMeta("lastExport").catch(() => null) : localStorage.getItem("selfchat-last-export-v1");
+  elements.automaticBackupStatus.textContent = `Automatic backup: ${formatStatusTime(lastAutomaticBackup)}`;
+  elements.exportStatus.textContent = `Last export: ${formatStatusTime(lastExport)}`;
+  let warning = storageWarning;
+  if (!warning && !("showDirectoryPicker" in window)) warning = "Automatic folder backup is not supported by this browser.";
+  if (!warning && repository) {
+    const handle = await repository.getMeta("backupDirectoryHandle").catch(() => null);
+    if (!handle) warning = "Choose an automatic backup folder in Data settings.";
+    else {
+      const permission = await handle.queryPermission?.({ mode: "readwrite" }).catch(() => "denied");
+      if (permission !== "granted") warning = "Automatic backup folder permission was lost. Choose the folder again.";
+    }
+  }
+  elements.dataStatusWarning.textContent = warning;
+  elements.dataStatusWarning.hidden = !warning;
+}
+
+async function runAutomaticBackup(reason = "change") {
+  if (!repository || automaticBackupRunning || !("showDirectoryPicker" in window)) return refreshDataStatus();
+  const handle = await repository.getMeta("backupDirectoryHandle").catch(() => null);
+  if (!handle) return refreshDataStatus();
+  const permission = await handle.queryPermission?.({ mode: "readwrite" }).catch(() => "denied");
+  if (permission !== "granted") return refreshDataStatus();
+  const last = await repository.getMeta("lastAutomaticBackup").catch(() => null);
+  if (reason === "startup" && last?.slice(0, 10) === new Date().toISOString().slice(0, 10)) return refreshDataStatus();
+  automaticBackupRunning = true;
+  try {
+    const payload = await buildBackupPayload();
+    const file = await handle.getFileHandle("SelfChat automatic backup.json", { create: true });
+    const writable = await file.createWritable();
+    await writable.write(JSON.stringify(payload, null, 2));
+    await writable.close();
+    await repository.setMeta("lastAutomaticBackup", new Date().toISOString());
+    storageWarning = "";
+  } catch (error) {
+    storageWarning = `Automatic backup failed: ${error.message}`;
+  } finally {
+    automaticBackupRunning = false;
+    await refreshDataStatus();
+  }
+}
+
+function queueAutomaticBackup() {
+  if (!repository) return;
+  clearTimeout(automaticBackupTimer);
+  automaticBackupTimer = setTimeout(() => runAutomaticBackup("change"), 1500);
 }
 
 function normalizeCustomStickers(value) {
@@ -713,7 +764,7 @@ async function sendMessage() {
     elements.messageInput.focus();
     return;
   }
-  clearDraftBuffer(message.chatId, elements.messageInput.value);
+  if (!repository) clearDraftBuffer(message.chatId, elements.messageInput.value);
   elements.messageInput.value = "";
   resizeComposer();
   updateComposerState();
@@ -742,10 +793,13 @@ async function sendImages(files, caption = "") {
   let stored = 0;
   const addedMessageIds = [];
   const addedImageIds = [];
+  const attachmentRecords = [];
   for (const [index, file] of images.entries()) {
     const imageId = uid();
     try {
-      await putImage({ id: imageId, blob: file, name: file.name || `Pasted image ${index + 1}` });
+      const record = { id: imageId, blob: file, name: file.name || `Pasted image ${index + 1}` };
+      if (repository) attachmentRecords.push(record);
+      else await putImage(record);
       addedImageIds.push(imageId);
       const messageId = uid();
       state.messages.push({
@@ -762,14 +816,14 @@ async function sendImages(files, caption = "") {
   if (!stored) return;
   state.drafts[state.activeChatId] = "";
   try {
-    await saveState();
+    await saveState({ attachmentsPut: attachmentRecords });
   } catch (_) {
     state.messages = state.messages.filter(message => !addedMessageIds.includes(message.id));
-    await deleteImages(addedImageIds).catch(() => {});
+    if (!repository) await deleteImages(addedImageIds).catch(() => {});
     showToast("Images not sent — they are still ready to send", 5000);
     return;
   }
-  clearDraftBuffer(state.activeChatId, elements.messageInput.value);
+  if (!repository) clearDraftBuffer(state.activeChatId, elements.messageInput.value);
   clearPendingImages();
   elements.messageInput.value = "";
   resizeComposer();
@@ -880,7 +934,7 @@ async function selectChat(id, messageId = null) {
   closeStickerPanel();
   selectedMessageIds.clear();
   focusedMessageId = messageId;
-  await saveState({ snapshot: false });
+  await saveState({ significant: false });
   elements.messageInput.value = state.drafts[id] || "";
   resizeComposer();
   updateComposerState();
@@ -913,9 +967,15 @@ function clearMessageSelection() {
 async function deleteSelectedMessages() {
   const messages = state.messages.filter(message => selectedMessageIds.has(message.id));
   if (!messages.length || !confirm(`Move ${messages.length} selected message${messages.length === 1 ? "" : "s"} to Trash?`)) return;
-  await createRecoverySnapshot("Before deleting selected messages", state, { force: true }).catch(() => {});
   try {
-    await commitExplicit(messages.map(message => operation("message.delete", message.id, "message", { message, originalChatId: message.chatId })));
+    const deletedAt = new Date().toISOString();
+    messages.forEach(message => {
+      state.trash = state.trash.filter(item => item.id !== `message:${message.id}`);
+      state.trash.push({ id: `message:${message.id}`, entityType: "message", entityId: message.id, deletedAt, payload: { message: structuredClone(message), originalChatId: message.chatId } });
+    });
+    state.messages = state.messages.filter(message => !selectedMessageIds.has(message.id));
+    state.deletedMessageIds = [...new Set([...state.deletedMessageIds, ...messages.map(message => message.id)])];
+    await saveState();
     selectedMessageIds.clear();
     render();
     showToast(`${messages.length} message${messages.length === 1 ? "" : "s"} moved to Trash`);
@@ -981,7 +1041,7 @@ function redactLegacySources(targets) {
 }
 
 async function redactRecoveryPoints(targets) {
-  const snapshots = await getRecoverySnapshots().catch(() => []);
+  const snapshots = await withRecoveryStore("readonly", store => store.getAll()).catch(() => []);
   await withRecoveryStore("readwrite", store => snapshots.forEach(snapshot => {
     const nextState = redactPurgedContent(snapshot.state, targets);
     store.put({ ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length });
@@ -990,12 +1050,13 @@ async function redactRecoveryPoints(targets) {
 
 async function completePermanentPurge(items) {
   const targets = purgeTargets(items);
-  await repository?.purgeHistory([...targets.entityIds]);
+  await repository?.purgeEveryCopy(targets, state);
   redactLegacySources(targets);
   await redactRecoveryPoints(targets);
-  const snapshots = await getRecoverySnapshots().catch(() => []);
+  const snapshots = await withRecoveryStore("readonly", store => store.getAll()).catch(() => []);
   const referenced = SelfChatStorageCore.referencedAttachmentIds(state, snapshots.map(snapshot => snapshot.state));
-  await deleteImages([...targets.imageIds].filter(id => !referenced.has(id)));
+  const unreferenced = [...targets.imageIds].filter(id => !referenced.has(id));
+  if (unreferenced.length) await withImageStore("readwrite", store => unreferenced.forEach(id => store.delete(id))).catch(() => {});
   lastRecoverySignature = recoverySignature(state);
 }
 
@@ -1022,11 +1083,11 @@ elements.messageInput.addEventListener("input", () => {
   resizeComposer();
   updateComposerState();
   state.drafts[state.activeChatId] = elements.messageInput.value;
-  setDraftBuffer(state.activeChatId, elements.messageInput.value);
+  if (!repository) setDraftBuffer(state.activeChatId, elements.messageInput.value);
   clearTimeout(draftSaveTimer);
   const bufferedChatId = state.activeChatId;
   const bufferedText = elements.messageInput.value;
-  draftSaveTimer = setTimeout(() => saveState({ snapshot: false }).then(() => clearDraftBuffer(bufferedChatId, bufferedText)).catch(() => showToast("Draft could not be saved", 4000)), 180);
+  draftSaveTimer = setTimeout(() => saveState({ significant: false }).then(() => { if (!repository) clearDraftBuffer(bufferedChatId, bufferedText); }).catch(() => showToast("Draft could not be saved", 4000)), 180);
 });
 elements.messageInput.addEventListener("keydown", event => {
   if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
@@ -1152,17 +1213,19 @@ elements.stickerForm.addEventListener("submit", async event => {
   const imageId = uid();
   const label = elements.stickerNameInput.value.trim() || "My sticker";
   elements.saveStickerButton.disabled = true;
-  try {
-    await putImage({ id: imageId, blob: pendingStickerImage, name: pendingStickerImage.name || label });
-  } catch (_) {
-    elements.saveStickerButton.disabled = false;
-    return showToast("Could not save the sticker locally");
+  const attachment = { id: imageId, blob: pendingStickerImage, name: pendingStickerImage.name || label };
+  if (!repository) {
+    try { await putImage(attachment); }
+    catch (_) {
+      elements.saveStickerButton.disabled = false;
+      return showToast("Could not save the sticker locally");
+    }
   }
   const sticker = { id: `custom-${uid()}`, imageId, label: label.slice(0, 40) };
   state.customStickers.push(sticker);
-  try { await saveState(); } catch (_) {
+  try { await saveState({ attachmentsPut: repository ? [attachment] : [] }); } catch (_) {
     state.customStickers = state.customStickers.filter(item => item.id !== sticker.id);
-    await deleteImages([imageId]).catch(() => {});
+    if (!repository) await deleteImages([imageId]).catch(() => {});
     elements.saveStickerButton.disabled = false;
     return showToast("Could not save the sticker locally");
   }
@@ -1251,9 +1314,14 @@ $("#deleteChatButton").addEventListener("click", async () => {
   const chat = activeChat();
   if (chat.id === "unsorted") return showToast("Unsorted is permanent");
   if (!confirm(`Move “${chat.name}” and all its messages to Trash? You can restore it later.`)) return;
-  await createRecoverySnapshot(`Before deleting ${chat.name}`, state, { force: true }).catch(() => {});
+  const deletedMessages = state.messages.filter(message => message.chatId === chat.id);
+  state.trash = state.trash.filter(item => item.id !== `chat:${chat.id}`);
+  state.trash.push({
+    id: `chat:${chat.id}`, entityType: "chat", entityId: chat.id, deletedAt: new Date().toISOString(),
+    payload: { chat: structuredClone(chat), messages: structuredClone(deletedMessages), draft: state.drafts[chat.id] || "" }
+  });
   state.deletedChatIds.push(chat.id);
-  state.deletedMessageIds.push(...state.messages.filter(message => message.chatId === chat.id).map(message => message.id));
+  state.deletedMessageIds.push(...deletedMessages.map(message => message.id));
   state.chats = state.chats.filter(item => item.id !== chat.id);
   state.messages = state.messages.filter(message => message.chatId !== chat.id);
   state.activeChatId = state.chats[0].id;
@@ -1273,9 +1341,10 @@ elements.moveForm.addEventListener("submit", async event => {
     clearMessageSelection();
     return showToast("Messages are already in that chat");
   }
-  const operations = moving.map(message => operation("message.move", message.id, "message", { ...message, chatId: targetChatId }));
   try {
-    await commitExplicit(operations);
+    const movedAt = new Date().toISOString();
+    moving.forEach(message => { message.chatId = targetChatId; message.movedAt = movedAt; });
+    await saveState();
     elements.moveDialog.close();
     selectedMessageIds.clear();
     render();
@@ -1298,8 +1367,8 @@ async function renderRecoveryPoints() {
   }
   const recent = snapshots.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
   elements.recoveryStatus.textContent = recent.length
-    ? `Keeping up to ${MAX_RECOVERY_SNAPSHOTS} rolling recovery points on this device.`
-    : "Your first recovery point will appear after the next content change.";
+    ? `Keeping one recovery point per day for up to ${MAX_RECOVERY_SNAPSHOTS} days.`
+    : "Your first daily recovery point will appear after the next content change.";
   elements.recoveryList.innerHTML = recent.map(snapshot => {
     const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt));
     const counts = `${snapshot.messageCount} message${snapshot.messageCount === 1 ? "" : "s"} · ${snapshot.chatCount} chat${snapshot.chatCount === 1 ? "" : "s"}`;
@@ -1308,17 +1377,16 @@ async function renderRecoveryPoints() {
 }
 
 async function renderStorageDiagnostics() {
-  const [estimate, images, snapshots, operationCount] = await Promise.all([
+  const [estimate, images, snapshots] = await Promise.all([
     navigator.storage?.estimate?.().catch(() => null),
     getAllImages().catch(() => []),
-    getRecoverySnapshots().catch(() => []),
-    repository?.operationCount?.().catch(() => null)
+    getRecoverySnapshots().catch(() => [])
   ]);
   const used = estimate?.usage == null ? "Unavailable" : `${(estimate.usage / 1024 / 1024).toFixed(1)} MB used`;
   const quota = estimate?.quota == null ? "" : ` of ${(estimate.quota / 1024 / 1024).toFixed(0)} MB`;
-  const lastExport = localStorage.getItem("selfchat-last-export-v1");
+  const lastExport = repository ? await repository.getMeta("lastExport").catch(() => null) : localStorage.getItem("selfchat-last-export-v1");
   const exportText = lastExport ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(lastExport)) : "Never";
-  elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Transactional IndexedDB active" : "Legacy fallback active"} · ${used}${quota} · ${images.length} local image${images.length === 1 ? "" : "s"} · ${snapshots.length} recovery point${snapshots.length === 1 ? "" : "s"}${operationCount == null ? "" : ` · ${operationCount} operations`} · Last export: ${exportText}`;
+  elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
 }
 
 $("#settingsButton").addEventListener("click", () => {
@@ -1326,6 +1394,23 @@ $("#settingsButton").addEventListener("click", () => {
   renderTrash();
   renderRecoveryPoints();
   renderStorageDiagnostics();
+});
+elements.automaticBackupFolderButton.addEventListener("click", async () => {
+  if (!("showDirectoryPicker" in window) || !repository) return refreshDataStatus();
+  try {
+    const handle = await window.showDirectoryPicker({ mode: "readwrite", id: "selfchat-backups" });
+    const permission = await handle.requestPermission({ mode: "readwrite" });
+    if (permission !== "granted") throw new Error("Folder permission was not granted");
+    await repository.setMeta("backupDirectoryHandle", handle);
+    storageWarning = "";
+    await runAutomaticBackup("folder-selected");
+    showToast("Automatic backup folder saved");
+  } catch (error) {
+    if (error.name !== "AbortError") {
+      storageWarning = `Automatic backup folder unavailable: ${error.message}`;
+      await refreshDataStatus();
+    }
+  }
 });
 $("#closeSettingsButton").addEventListener("click", () => elements.settingsDialog.close());
 $("#openTrashButton").addEventListener("click", () => {
@@ -1341,24 +1426,34 @@ elements.trashList.addEventListener("click", async event => {
   if (!button || !item) return;
   const payload = item.payload || {};
   if (button.dataset.trashAction === "restore") {
-    let restoreOperation;
-    if (item.entityType === "chat") {
-      restoreOperation = operation("chat.restore", item.entityId, "chat", payload);
-    } else {
-      const originalChatId = payload.originalChatId || payload.message?.chatId;
-      const targetChatId = state.chats.some(chat => chat.id === originalChatId) ? originalChatId : "unsorted";
-      restoreOperation = operation("message.restore", item.entityId, "message", { message: payload.message, targetChatId });
-    }
     try {
-      await commitExplicit([restoreOperation]);
+      if (item.entityType === "chat") {
+        if (payload.chat && !state.chats.some(chat => chat.id === payload.chat.id)) state.chats.push(payload.chat);
+        (payload.messages || []).forEach(message => {
+          if (!state.messages.some(candidate => candidate.id === message.id)) state.messages.push(message);
+        });
+        if (payload.draft) state.drafts[item.entityId] = payload.draft;
+        state.deletedChatIds = state.deletedChatIds.filter(id => id !== item.entityId);
+        state.deletedMessageIds = state.deletedMessageIds.filter(id => !(payload.messages || []).some(message => message.id === id));
+      } else if (payload.message) {
+        const originalChatId = payload.originalChatId || payload.message.chatId;
+        const targetChatId = state.chats.some(chat => chat.id === originalChatId) ? originalChatId : "unsorted";
+        const restored = { ...payload.message, chatId: targetChatId, movedAt: targetChatId === payload.message.chatId ? payload.message.movedAt : new Date().toISOString() };
+        state.messages = state.messages.filter(message => message.id !== item.entityId);
+        state.messages.push(restored);
+        state.deletedMessageIds = state.deletedMessageIds.filter(id => id !== item.entityId);
+      }
+      state.trash = state.trash.filter(candidate => candidate.id !== item.id);
+      await saveState();
       render(); renderTrash();
       showToast(item.entityType === "chat" ? "Chat restored" : "Message restored");
     } catch (_) { showToast("Item could not be restored", 5000); }
     return;
   }
-  if (!confirm(`Erase “${trashLabel(item).slice(0, 80)}” from this browser permanently? This removes it from Trash, recovery points, migration backups, operation history, and unreferenced local image storage. This cannot be undone.`)) return;
+  if (!confirm(`Erase “${trashLabel(item).slice(0, 80)}” from this browser permanently? This removes it from Trash, daily recovery points, migration backups, and unreferenced local attachment storage. This cannot be undone.`)) return;
   try {
-    await commitExplicit([operation(`${item.entityType}.purge`, item.entityId, item.entityType, { trashId: item.id })]);
+    state.trash = state.trash.filter(candidate => candidate.id !== item.id);
+    await saveState();
     await completePermanentPurge([item]);
     renderTrash();
     await renderRecoveryPoints();
@@ -1370,7 +1465,8 @@ elements.emptyTrashButton.addEventListener("click", async () => {
   if (!state.trash.length || !confirm("Erase every Trash item from this browser permanently? This also removes matching recovery, migration, history, and unreferenced image data. This cannot be undone.")) return;
   const items = structuredClone(state.trash);
   try {
-    await commitExplicit([operation("trash.empty", "trash", "trash", { itemIds: state.trash.map(item => item.id) })]);
+    state.trash = [];
+    await saveState();
     await completePermanentPurge(items);
     renderTrash();
     await renderRecoveryPoints();
@@ -1399,15 +1495,17 @@ $("#confirmRecoveryButton").addEventListener("click", async () => {
   const snapshot = recoveryPreviewSnapshot;
   if (!snapshot) return;
   $("#confirmRecoveryButton").disabled = true;
-  await createRecoverySnapshot("Before restore", state, { force: true }).catch(() => {});
+  if (repository) await repository.commit({ activeChatId: state.activeChatId }, { significant: true, snapshotState: state }).catch(() => {});
+  else await createRecoverySnapshot("Before restore", state, { force: true }).catch(() => {});
   try {
     const target = normalizeState(snapshot.state);
     if (repository) {
-      state = await repository.replaceState(target, operation("state.restore", snapshot.id, "state", { snapshotId: snapshot.id, chatCount: target.chats.length, messageCount: target.messages.length }, "recovery"));
+      await repository.replaceState(target);
+      state = target;
       persistedState = structuredClone(state);
     } else {
       state = target;
-      await saveState({ snapshot: false, source: "recovery" });
+      await saveState({ significant: false });
     }
     lastRecoverySignature = recoverySignature(state);
     recoveryPreviewSnapshot = null;
@@ -1421,10 +1519,7 @@ $("#confirmRecoveryButton").addEventListener("click", async () => {
   finally { $("#confirmRecoveryButton").disabled = false; }
 });
 $("#exportButton").addEventListener("click", async () => {
-  const referenced = SelfChatStorageCore.referencedAttachmentIds(state);
-  const imageRecords = (await getAllImages().catch(() => [])).filter(record => referenced.has(record.id));
-  const images = await Promise.all(imageRecords.map(async record => ({ id: record.id, name: record.name, data: await blobToDataUrl(record.blob) })));
-  const payload = { ...state, images, schemaVersion: 2, exportedAt: new Date().toISOString() };
+  const payload = await buildBackupPayload();
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
@@ -1432,8 +1527,11 @@ $("#exportButton").addEventListener("click", async () => {
   link.download = `selfchat-backup-${new Date().toISOString().slice(0, 10)}.json`;
   link.click();
   URL.revokeObjectURL(url);
-  localStorage.setItem("selfchat-last-export-v1", new Date().toISOString());
+  const exportedAt = new Date().toISOString();
+  if (repository) await repository.setMeta("lastExport", exportedAt);
+  else localStorage.setItem("selfchat-last-export-v1", exportedAt);
   renderStorageDiagnostics();
+  await refreshDataStatus();
   showToast("Backup exported");
 });
 elements.importInput.addEventListener("change", async () => {
@@ -1443,33 +1541,23 @@ elements.importInput.addEventListener("change", async () => {
   let existingImageIds = new Set();
   let importCommitted = false;
   try {
-    const imported = JSON.parse(await file.text());
-    if (![undefined, 1, 2].includes(imported.schemaVersion) || !Array.isArray(imported.chats) || !imported.chats.length || !Array.isArray(imported.messages)) throw new Error("Invalid backup");
-    const imageCount = Array.isArray(imported.images) ? imported.images.length : 0;
-    if (!confirm(`Merge ${imported.chats.length} chats, ${imported.messages.length} messages, and ${imageCount} images from this backup? Existing records will be kept; matching stable IDs use the newer version.`)) return;
-    await createRecoverySnapshot("Before import", state, { force: true }).catch(() => {});
-    importedImagesToRollback = Array.isArray(imported.images) ? imported.images.map(image => ({ id: image.id, name: image.name || "Image", blob: dataUrlToBlob(image.data) })) : [];
+    const parsed = SelfChatStorageCore.parseBackup(JSON.parse(await file.text()), DEFAULT_STATE);
+    const imported = parsed.state;
+    const imageCount = parsed.attachments.length;
+    if (!confirm(`Merge ${imported.chats.length} chats, ${imported.messages.length} messages, and ${imageCount} attachments from this backup? Existing records will be kept; matching stable IDs use the newer version.`)) return;
+    importedImagesToRollback = parsed.attachments.map(image => ({ id: image.id, name: image.name || "Attachment", blob: dataUrlToBlob(image.data) }));
     existingImageIds = new Set((await getAllImages().catch(() => [])).map(image => image.id));
-    await addImages(importedImagesToRollback.filter(image => !existingImageIds.has(image.id)));
-    const importedState = normalizeState({
-      activeChatId: imported.activeChatId || imported.chats[0].id,
-      chats: imported.chats,
-      messages: imported.messages,
-      customStickers: normalizeCustomStickers(imported.customStickers),
-      trash: Array.isArray(imported.trash) ? imported.trash : [],
-      deletedChatIds: Array.isArray(imported.deletedChatIds) ? imported.deletedChatIds : [],
-      deletedMessageIds: Array.isArray(imported.deletedMessageIds) ? imported.deletedMessageIds : [],
-      drafts: imported.drafts || {}
-    });
-    state = mergeStates([state, importedState], state);
-    await saveState({ source: "backup-import" });
+    const newAttachments = importedImagesToRollback.filter(image => !existingImageIds.has(image.id));
+    if (!repository) await addImages(newAttachments);
+    state = mergeStates([state, imported], state);
+    await saveState({ attachmentsPut: repository ? newAttachments : [] });
     importCommitted = true;
     renderStickerGrid();
     render();
     elements.settingsDialog.close();
     showToast("Backup merged");
   } catch (_) {
-    if (!importCommitted) await deleteImages(importedImagesToRollback.filter(image => !existingImageIds.has(image.id)).map(image => image.id)).catch(() => {});
+    if (!repository && !importCommitted) await deleteImages(importedImagesToRollback.filter(image => !existingImageIds.has(image.id)).map(image => image.id)).catch(() => {});
     showToast("That is not a valid SelfChat backup");
   } finally {
     elements.importInput.value = "";
@@ -1597,9 +1685,10 @@ elements.contextMenu.addEventListener("click", async event => {
   }
   if (action === "delete") {
     if (confirm("Move this message to Trash? You can restore it later.")) {
-      await createRecoverySnapshot("Before deleting a message", state, { force: true }).catch(() => {});
       state.deletedMessageIds.push(message.id);
       state.messages = state.messages.filter(item => item.id !== message.id);
+      state.trash = state.trash.filter(item => item.id !== `message:${message.id}`);
+      state.trash.push({ id: `message:${message.id}`, entityType: "message", entityId: message.id, deletedAt: new Date().toISOString(), payload: { message: structuredClone(message), originalChatId: message.chatId } });
       await saveState();
       render();
       showToast("Message moved to Trash");
@@ -1675,14 +1764,14 @@ if (tabChannel) tabChannel.addEventListener("message", event => {
 });
 window.addEventListener("pagehide", () => {
   clearTimeout(draftSaveTimer);
-  if (!tabIsBlocked) void saveState({ snapshot: false }).catch(() => {});
+  if (!tabIsBlocked) void saveState({ significant: false }).catch(() => {});
   if (activeTabId() === tabId) localStorage.removeItem(ACTIVE_TAB_KEY);
   tabChannel?.close();
 });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "hidden" || tabIsBlocked) return;
   clearTimeout(draftSaveTimer);
-  void saveState({ snapshot: false }).catch(() => {});
+  void saveState({ significant: false }).catch(() => {});
 });
 
 claimThisTab();
