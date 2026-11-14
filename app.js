@@ -44,6 +44,7 @@ const elements = {
   closeThisTabButton: $("#closeThisTabButton"), useThisTabButton: $("#useThisTabButton"),
   chatList: $("#chatList"), activeChatAvatar: $("#activeChatAvatar"), activeChatName: $("#activeChatName"), activeChatNameInput: $("#activeChatNameInput"),
   emptyAvatar: $("#emptyAvatar"), emptyTitle: $("#emptyTitle"), emptyState: $("#emptyState"), messageList: $("#messageList"),
+  messageMarquee: $("#messageMarquee"),
   messageStage: $("#messageStage"), composer: $("#composer"), messageInput: $("#messageInput"), sendButton: $("#sendButton"),
   imageButton: $("#imageButton"), imageInput: $("#imageInput"), dropOverlay: $("#dropOverlay"),
   imagePreviewTray: $("#imagePreviewTray"), imagePreviewList: $("#imagePreviewList"), imagePreviewTitle: $("#imagePreviewTitle"),
@@ -61,7 +62,7 @@ const elements = {
   recoveryList: $("#recoveryList"), recoveryStatus: $("#recoveryStatus"),
   storageDiagnostics: $("#storageDiagnostics"), recoveryPreviewDialog: $("#recoveryPreviewDialog"), recoveryPreviewSummary: $("#recoveryPreviewSummary"),
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
-  moveDialog: $("#moveMessagesDialog"), moveForm: $("#moveMessagesForm"), moveTitle: $("#moveMessagesTitle"), moveDestination: $("#moveDestinationSelect"),
+  moveDialog: $("#moveMessagesDialog"), moveForm: $("#moveMessagesForm"), moveTitle: $("#moveMessagesTitle"), moveDestination: $("#moveDestinationSelect"), confirmMoveButton: $("#confirmMoveButton"),
   imageViewerDialog: $("#imageViewerDialog"), imageViewerImage: $("#imageViewerImage"), imageViewerTitle: $("#imageViewerTitle"),
   imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption"),
   originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
@@ -79,6 +80,8 @@ let draftSaveTimer = null;
 let selectedEmoji = EMOJIS[0];
 let contextMessageId = null;
 let selectedMessageIds = new Set();
+let marqueeSelection = null;
+let pendingMoveMessageIds = [];
 let imageRenderToken = 0;
 const imageUrlCache = new Map();
 let stickerGridObjectUrls = [];
@@ -715,7 +718,8 @@ function renderMessages({ scroll = "bottom" } = {}) {
     return `${divider}${messageArticleHtml(message, query, activeMatchId)}`;
   }).join("");
 
-  hydrateImages(renderToken, activeMatchId || focusedMessageId);
+  const stickToBottom = scroll === "bottom" && !query && !activeMatchId && !focusedMessageId;
+  hydrateImages(renderToken, activeMatchId || focusedMessageId, elements.messageList, stickToBottom);
   hydrateFileAttachments(renderToken);
   if (activeMatchId) requestAnimationFrame(() => scrollMessageIntoView(activeMatchId));
   else if (focusedMessageId) requestAnimationFrame(() => {
@@ -738,7 +742,7 @@ function navigateSearch(direction) {
   renderMessages({ scroll: "target" });
 }
 
-async function hydrateImages(renderToken, anchoredMessageId = null, root = elements.messageList) {
+async function hydrateImages(renderToken, anchoredMessageId = null, root = elements.messageList, stickToBottom = false) {
   const images = [...root.querySelectorAll("[data-image-id]:not([src])")];
   await Promise.all(images.map(async image => {
     try {
@@ -754,7 +758,11 @@ async function hydrateImages(renderToken, anchoredMessageId = null, root = eleme
       image.addEventListener("load", () => {
         image.hidden = false;
         if (image.nextElementSibling) image.nextElementSibling.hidden = true;
-        requestAnimationFrame(() => anchoredMessageId ? scrollMessageIntoView(anchoredMessageId, "auto") : restoreScrollAnchor(anchor));
+        requestAnimationFrame(() => {
+          if (anchoredMessageId) scrollMessageIntoView(anchoredMessageId, "auto");
+          else if (stickToBottom) scrollToBottom();
+          else restoreScrollAnchor(anchor);
+        });
       }, { once: true });
       image.addEventListener("error", () => {
         imageUrlCache.delete(image.dataset.imageId);
@@ -817,7 +825,7 @@ function insertMessageElement(message, { scroll = false } = {}) {
   refreshDayDividers();
   updateMessageListVisibility();
   const article = elements.messageList.querySelector(`[data-message-id="${CSS.escape(message.id)}"]`);
-  hydrateImages(imageRenderToken, null, article);
+  hydrateImages(imageRenderToken, null, article, scroll);
   hydrateFileAttachments(imageRenderToken, article);
   if (scroll) requestAnimationFrame(scrollToBottom);
 }
@@ -838,6 +846,123 @@ function updateSelectionUi() {
     article.setAttribute("aria-selected", String(selected));
   });
 }
+
+function marqueeSelectionIds(selection, currentContentY) {
+  const top = Math.min(selection.startContentY, currentContentY);
+  const bottom = Math.max(selection.startContentY, currentContentY);
+  const left = Math.min(selection.startClientX, selection.currentClientX);
+  const right = Math.max(selection.startClientX, selection.currentClientX);
+  const stageTop = elements.messageStage.getBoundingClientRect().top;
+  const hits = new Set();
+  elements.messageList.querySelectorAll("[data-message-id]").forEach(article => {
+    const rect = article.getBoundingClientRect();
+    const articleTop = rect.top - stageTop + elements.messageStage.scrollTop;
+    const articleBottom = rect.bottom - stageTop + elements.messageStage.scrollTop;
+    if (rect.right >= left && rect.left <= right && articleBottom >= top && articleTop <= bottom) hits.add(article.dataset.messageId);
+  });
+  return hits;
+}
+
+function updateMarqueeSelection() {
+  const selection = marqueeSelection;
+  if (!selection?.active) return;
+  const stageRect = elements.messageStage.getBoundingClientRect();
+  const clientX = Math.max(stageRect.left, Math.min(selection.currentClientX, stageRect.right));
+  const clientY = Math.max(stageRect.top, Math.min(selection.currentClientY, stageRect.bottom));
+  const currentContentY = clientY - stageRect.top + elements.messageStage.scrollTop;
+  const startViewportY = selection.startContentY - elements.messageStage.scrollTop + stageRect.top;
+  const visibleStartY = Math.max(stageRect.top, Math.min(startViewportY, stageRect.bottom));
+  const visibleCurrentY = Math.max(stageRect.top, Math.min(clientY, stageRect.bottom));
+  elements.messageMarquee.hidden = false;
+  elements.messageMarquee.style.left = `${Math.min(selection.startClientX, clientX)}px`;
+  elements.messageMarquee.style.top = `${Math.min(visibleStartY, visibleCurrentY)}px`;
+  elements.messageMarquee.style.width = `${Math.abs(clientX - selection.startClientX)}px`;
+  elements.messageMarquee.style.height = `${Math.abs(visibleCurrentY - visibleStartY)}px`;
+
+  const hits = marqueeSelectionIds(selection, currentContentY);
+  if (selection.toggle) {
+    selectedMessageIds = new Set(selection.baseIds);
+    hits.forEach(id => selectedMessageIds.has(id) ? selectedMessageIds.delete(id) : selectedMessageIds.add(id));
+  } else if (selection.add) {
+    selectedMessageIds = new Set([...selection.baseIds, ...hits]);
+  } else {
+    selectedMessageIds = hits;
+  }
+  updateSelectionUi();
+}
+
+function runMarqueeAutoScroll() {
+  const selection = marqueeSelection;
+  if (!selection?.active) return;
+  const rect = elements.messageStage.getBoundingClientRect();
+  const edge = 48;
+  const topDistance = selection.currentClientY - rect.top;
+  const bottomDistance = rect.bottom - selection.currentClientY;
+  let delta = 0;
+  if (topDistance < edge) delta = -Math.ceil((edge - Math.max(0, topDistance)) / 5);
+  else if (bottomDistance < edge) delta = Math.ceil((edge - Math.max(0, bottomDistance)) / 5);
+  if (delta) {
+    const before = elements.messageStage.scrollTop;
+    elements.messageStage.scrollTop += delta;
+    if (elements.messageStage.scrollTop !== before) updateMarqueeSelection();
+  }
+  selection.animationFrame = requestAnimationFrame(runMarqueeAutoScroll);
+}
+
+function finishMarqueeSelection(pointerId, cancelled = false) {
+  const selection = marqueeSelection;
+  if (!selection || selection.pointerId !== pointerId) return;
+  if (selection.animationFrame) cancelAnimationFrame(selection.animationFrame);
+  if (elements.messageStage.hasPointerCapture(pointerId)) elements.messageStage.releasePointerCapture(pointerId);
+  elements.messageMarquee.hidden = true;
+  elements.messageMarquee.removeAttribute("style");
+  elements.messageStage.classList.remove("marquee-ready");
+  document.body.classList.remove("marquee-selecting");
+  if (!selection.active && !cancelled) clearMessageSelection();
+  marqueeSelection = null;
+}
+
+elements.messageStage.addEventListener("pointerdown", event => {
+  if (event.button !== 0 || event.pointerType === "touch" || document.querySelector("dialog[open]") || tabIsBlocked) return;
+  if (event.target.closest("[data-message-id], .day-divider, button, a, input, textarea, select")) return;
+  const rect = elements.messageStage.getBoundingClientRect();
+  const scrollbarWidth = elements.messageStage.offsetWidth - elements.messageStage.clientWidth;
+  if (scrollbarWidth > 0 && event.clientX >= rect.right - scrollbarWidth) return;
+  marqueeSelection = {
+    pointerId: event.pointerId,
+    startClientX: event.clientX,
+    startClientY: event.clientY,
+    startContentY: event.clientY - rect.top + elements.messageStage.scrollTop,
+    currentClientX: event.clientX,
+    currentClientY: event.clientY,
+    baseIds: new Set(selectedMessageIds),
+    add: event.shiftKey,
+    toggle: event.ctrlKey || event.metaKey,
+    active: false,
+    animationFrame: 0
+  };
+  elements.messageStage.setPointerCapture(event.pointerId);
+  elements.messageStage.classList.add("marquee-ready");
+});
+
+elements.messageStage.addEventListener("pointermove", event => {
+  const selection = marqueeSelection;
+  if (!selection || selection.pointerId !== event.pointerId) return;
+  selection.currentClientX = event.clientX;
+  selection.currentClientY = event.clientY;
+  if (!selection.active && Math.hypot(event.clientX - selection.startClientX, event.clientY - selection.startClientY) < 5) return;
+  if (!selection.active) {
+    selection.active = true;
+    document.body.classList.add("marquee-selecting");
+    closeContextMenu();
+    selection.animationFrame = requestAnimationFrame(runMarqueeAutoScroll);
+  }
+  event.preventDefault();
+  updateMarqueeSelection();
+});
+
+elements.messageStage.addEventListener("pointerup", event => finishMarqueeSelection(event.pointerId));
+elements.messageStage.addEventListener("pointercancel", event => finishMarqueeSelection(event.pointerId, true));
 
 function cancelInlineMessageEdit() {
   if (!inlineEditingMessageId) return;
@@ -1308,6 +1433,7 @@ function deleteSelectedMessages() {
 function openMoveDialog(messageIds) {
   selectedMessageIds = new Set(messageIds.filter(id => state.messages.some(message => message.id === id)));
   if (!selectedMessageIds.size) return;
+  pendingMoveMessageIds = [...selectedMessageIds];
   const count = selectedMessageIds.size;
   elements.moveTitle.textContent = count === 1 ? "Move message" : `Move ${count} messages`;
   elements.moveDestination.innerHTML = [...state.chats]
@@ -1316,6 +1442,8 @@ function openMoveDialog(messageIds) {
   const first = state.messages.find(message => selectedMessageIds.has(message.id));
   const alternative = state.chats.find(chat => chat.id !== first?.chatId);
   if (alternative) elements.moveDestination.value = alternative.id;
+  elements.confirmMoveButton.disabled = false;
+  elements.confirmMoveButton.textContent = "Move";
   elements.moveDialog.showModal();
 }
 
@@ -1713,17 +1841,18 @@ $("#deleteChatButton").addEventListener("click", async () => {
 
 elements.moveForm.addEventListener("submit", async event => {
   event.preventDefault();
+  if (elements.confirmMoveButton.disabled) return;
   const targetChatId = elements.moveDestination.value;
   if (!state.chats.some(chat => chat.id === targetChatId)) return;
-  const moving = state.messages.filter(message => selectedMessageIds.has(message.id) && message.chatId !== targetChatId);
+  const moving = SelfChatAppCore.moveMessages(state, pendingMoveMessageIds, targetChatId, new Date().toISOString());
   if (!moving.length) {
     elements.moveDialog.close();
     clearMessageSelection();
     return showToast("Messages are already in that chat");
   }
+  elements.confirmMoveButton.disabled = true;
+  elements.confirmMoveButton.textContent = "Moving…";
   try {
-    const movedAt = new Date().toISOString();
-    moving.forEach(message => { message.chatId = targetChatId; message.movedAt = movedAt; });
     await saveState();
     elements.moveDialog.close();
     selectedMessageIds.clear();
@@ -1732,10 +1861,20 @@ elements.moveForm.addEventListener("submit", async event => {
     updateSelectionUi();
     renderChats();
     showToast(`${moving.length} message${moving.length === 1 ? "" : "s"} moved`);
-  } catch (_) { showToast("Messages could not be moved", 5000); }
+  } catch (_) {
+    elements.confirmMoveButton.disabled = false;
+    elements.confirmMoveButton.textContent = "Move";
+    showToast("Messages could not be moved", 5000);
+  }
 });
 $("#cancelMoveButton").addEventListener("click", () => elements.moveDialog.close());
-elements.moveDialog.addEventListener("close", () => { selectedMessageIds.clear(); updateSelectionUi(); });
+elements.moveDialog.addEventListener("close", () => {
+  pendingMoveMessageIds = [];
+  elements.confirmMoveButton.disabled = false;
+  elements.confirmMoveButton.textContent = "Move";
+  selectedMessageIds.clear();
+  updateSelectionUi();
+});
 $("#moveSelectedButton").addEventListener("click", () => openMoveDialog([...selectedMessageIds]));
 $("#copySelectedButton").addEventListener("click", async () => {
   const text = SelfChatAppCore.copySelectedText(state.messages, selectedMessageIds, messagePlainText);

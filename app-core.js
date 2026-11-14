@@ -52,6 +52,17 @@
     return { messages: structuredClone(messages), previousTrash: structuredClone(previousTrash), previousDeletedIds };
   }
 
+  function moveMessages(state, messageIds, targetChatId, movedAt) {
+    const ids = new Set(messageIds || []);
+    if (!ids.size || !state.chats?.some(chat => chat.id === targetChatId)) return [];
+    const moving = (state.messages || []).filter(message => ids.has(message.id) && message.chatId !== targetChatId);
+    moving.forEach(message => {
+      message.chatId = targetChatId;
+      message.movedAt = movedAt;
+    });
+    return moving;
+  }
+
   function undoMessagesToTrash(state, token) {
     if (!token?.messages?.length) return [];
     const ids = new Set(token.messages.map(message => message.id));
@@ -127,5 +138,5 @@
     return { attachments, messages };
   }
 
-  return { createTextSendController, moveMessagesToTrash, undoMessagesToTrash, messagePlainText, copySelectedText, resolveReply, createAttachmentBatch };
+  return { createTextSendController, moveMessages, moveMessagesToTrash, undoMessagesToTrash, messagePlainText, copySelectedText, resolveReply, createAttachmentBatch };
 });

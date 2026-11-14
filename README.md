@@ -1,8 +1,8 @@
 # SelfChat
 
-SelfChat v1.0.0 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v1.0.2 is a private, desktop-first message stream organized into multiple chats containing only you.
 
-It supports fast text entry, replies with quoted context, images, stickers, generic file attachments, local search, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
+It supports fast text entry, replies with quoted context, images, stickers, generic file attachments, local search, drag-marquee message selection, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 
 ## Run locally
 

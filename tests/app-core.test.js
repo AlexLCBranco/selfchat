@@ -59,6 +59,28 @@ test("Undo restores a deleted message and removes its Trash record", () => {
   assert.equal(state.deletedMessageIds.includes(message.id), false);
 });
 
+test("moveMessages moves the requested records once and preserves identity and creation dates", () => {
+  const first = { id: "m1", chatId: "from", text: "first", createdAt: "2026-11-13T12:00:00.000Z" };
+  const second = { id: "m2", chatId: "from", text: "second", createdAt: "2026-11-13T12:01:00.000Z" };
+  const state = { chats: [{ id: "from" }, { id: "to" }], messages: [first, second] };
+  const moved = core.moveMessages(state, [first.id, first.id, "missing"], "to", "2026-11-13T12:02:00.000Z");
+  assert.deepEqual(moved, [first]);
+  assert.equal(first.id, "m1");
+  assert.equal(first.createdAt, "2026-11-13T12:00:00.000Z");
+  assert.equal(first.chatId, "to");
+  assert.equal(first.movedAt, "2026-11-13T12:02:00.000Z");
+  assert.equal(second.chatId, "from");
+  assert.deepEqual(core.moveMessages(state, [first.id], "to", "later"), []);
+});
+
+test("moveMessages rejects an unavailable destination without changing messages", () => {
+  const message = { id: "m1", chatId: "from", createdAt: "2026-11-13T12:00:00.000Z" };
+  const state = { chats: [{ id: "from" }], messages: [message] };
+  assert.deepEqual(core.moveMessages(state, [message.id], "missing", "2026-11-13T12:01:00.000Z"), []);
+  assert.equal(message.chatId, "from");
+  assert.equal(message.movedAt, undefined);
+});
+
 test("reply keeps a preview when its original is permanently deleted", () => {
   const reply = { id: "r1", chatId: "topic", text: "response", replyToId: "m1", replyPreview: "original text" };
   const state = { messages: [reply], trash: [] };
