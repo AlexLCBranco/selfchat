@@ -25,6 +25,8 @@ Status flow: Candidate → Approved → Implemented. Use project-prefixed stable
 | SC-17 | Optional message tags | Organize messages after capture, without mandatory categorization. | Candidate |
 | SC-18 | Named timeline sections | Insert optional named or unnamed dividers within a chat to separate trains of thought without creating subchats. V1 proposal: create at end or before an existing message; rename/delete dividers without affecting messages; preserve chronological timeline, composer, date separators, and Global View. Exclude auto-sections, collapsing, nested sections, and section-specific navigation/search. | Candidate |
 
+| SC-19 | File Explorer-style message selection and drag-to-move | Click to select one message; drag from empty timeline space to marquee-select multiple messages; drag any selected message or selection onto a sidebar groupchat to move using existing move-message rules. Support selection highlights, translucent marquee, drag-count preview, valid-target highlighting, cancel/invalid-drop safety, and Global View. Preserve text selection, attachments, metadata, timestamps, ordering, and persistence; verify current implementation before coding. | Approved |
+
 ## Strongest candidates from the initial discussion
 
 - #6 — Media and file gallery
