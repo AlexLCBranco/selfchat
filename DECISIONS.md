@@ -180,3 +180,65 @@ SelfChat supports replies with quoted context, generic local file attachments th
 This supersedes the earlier blanket exclusion of attachments while preserving the exclusions for other users, AI replies, accounts, cloud sync, analytics, and notifications.
 
 Reason: these are familiar WhatsApp-like self-chat workflows that improve context and local information capture without expanding the privacy boundary or adding social features.
+
+## 2026-11-14 — Local custom chat avatars
+
+SelfChat supports optional user-selected image avatars for chats while retaining emoji icons as the default and fallback. Avatar images are center-cropped to a compact local raster, stored in the unified attachment store, and included in backup, recovery, Trash restore, and permanent-erasure behavior. Creating and changing an avatar remains separate from the message capture loop.
+
+Reason: visual chat recognition is useful in a topic-heavy desktop sidebar, and the existing local attachment model supports it without adding recipients, network transmission, or capture-time friction.
+
+## 2026-11-14 — Persistent favorite chat pins
+
+SelfChat allows any number of chats to remain pinned at the top of the sidebar until explicitly unpinned. Pinned and unpinned groups each retain latest-activity ordering. Pin state is local, included in backup and recovery data, and restored with a chat from Trash.
+
+Reason: stable access to important topic chats reduces navigation effort without changing the message-capture loop; a local topic organizer does not benefit from WhatsApp's three-chat limit or temporary pin durations.
+
+## 2026-11-14 — Manual chat order and keyboard navigation
+
+Chats can be dragged or moved from their sidebar menu within the pinned or unpinned group. A group's existing activity order remains the default until the user manually arranges it; new chats appear first in a manually arranged unpinned group. `Ctrl+[` and `Ctrl+]` cycle through the visible chat order, while `Ctrl+1` through `Ctrl+9` open a chat directly.
+
+Reason: explicit ordering and direct keyboard navigation make a growing topic list predictable without adding organizational work to message capture.
+
+## 2026-11-14 — Starred and permanently pinned messages
+
+Individual messages can be starred for retrieval from Chat Options or pinned indefinitely to a navigable banner above their chat. Multiple message pins are allowed. Star and pin metadata follows a message when moved, survives full-fidelity Trash restoration, and is included in backups and recovery points.
+
+Reason: stars support later retrieval while pins keep active references immediately visible; both are optional actions after capture and preserve the fast send loop.
+
+## 2026-11-14 — Unified chat retrieval controls
+
+Each chat exposes a local gallery for images, generic files, and safe HTTP(S) links. In-chat search can combine text with message-type and inclusive date-range filters while retaining contextual navigation through the message stream.
+
+Reason: media browsing and structured search solve the same retrieval problem and can share the existing local-only message and attachment model without introducing remote previews or indexing services.
+
+## 2026-11-14 — Long-message and fenced-code presentation
+
+Long text messages collapse automatically in the interface and can be expanded without modifying their stored content. Triple-backtick fenced blocks render as local code panels with optional language labels and copy buttons; the original plain message remains authoritative for editing, copying, backup, and search.
+
+Reason: large prompts and reusable code should remain easy to capture as plain text while becoming faster to scan and reuse afterward.
+
+## 2026-11-14 — Optional post-capture message organization
+
+Messages may receive an optional display title and up to ten local tags after sending. Tags participate in in-chat retrieval. Messages can be duplicated while preserving reusable content, titles, tags, and attachment references but clearing reply, edit-history, star, and pin state. Direct message links use URL fragments so message IDs are not sent to the static host.
+
+Reason: reusable prompts and notes benefit from lightweight organization, but none of it should add fields or decisions to the capture loop.
+
+## 2026-11-14 — Chat notes and paired desktop view
+
+Each chat can store an optional local note outside the message stream. Notes live on the chat record, use the existing local persistence and backup lifecycle, and remain separate from message capture. Desktop split view shows a read-only companion conversation beside the active chat; the companion can be changed, closed, or swapped into the primary composer while preserving the paired view.
+
+Reason: stable project context should not need to masquerade as a message, while side-by-side reference should remain available without duplicating the full composer and attachment workflow or weakening the single active-chat model.
+
+## 2026-11-14 — Derived global message view
+
+SelfChat provides a permanent read-only All Messages view that derives one chronological timeline from the existing messages in active chats. Consecutive messages are grouped by their originating chat, and each message links back to its unchanged source record; Global View is never stored or managed as a chat.
+
+Users may hide individual chats from All Messages through local visibility metadata. Hidden chats remain active and unchanged everywhere else, remain available in the visibility manager, and new chats are visible by default.
+
+Reason: cross-topic review and exact-message navigation should be fast without duplicating local content, changing chat counts, or weakening the existing storage and privacy model.
+
+## 2026-11-17 — File Explorer-style message movement
+
+Messages can be selected individually, by Ctrl/Shift click, or with the existing timeline marquee, then dragged as one set onto a sidebar chat. Dragging reuses the established move operation, preserves message IDs, timestamps, metadata, and persistence, and also works from All Messages without changing its derived-view model. This narrowly replaces the earlier “read-only” description of All Messages: it still owns no records and has no composer, but may invoke the same explicit move action on source messages.
+
+Reason: moving captured thoughts between topic chats should be as direct and predictable as moving selected files between folders, without adding permanent controls or changing storage semantics.

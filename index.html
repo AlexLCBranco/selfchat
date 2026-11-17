@@ -8,7 +8,7 @@
   <title>SelfChat</title>
   <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=22">
+  <link rel="stylesheet" href="styles.css?v=40">
 </head>
 <body>
   <div class="app" id="app">
@@ -42,7 +42,7 @@
       </div>
       <div class="sidebar-foot">
         <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v1.0.2</span>
+        <span class="app-version" title="SelfChat version">v2.3.0</span>
       </div>
     </aside>
 
@@ -52,10 +52,19 @@
         <div class="conversation-title">
           <strong id="activeChatName">NBA</strong>
           <input id="activeChatNameInput" maxlength="48" aria-label="Rename chat" hidden>
-          <span>you</span>
+          <span id="conversationSubtitle">you</span>
         </div>
+        <button class="icon-button" id="chatNotesButton" type="button" aria-label="Open chat notes" title="Chat notes">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14v18H5z"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        </button>
+        <button class="icon-button" id="splitViewButton" type="button" aria-label="Open split chat view" title="Split chat view">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M12 4v16"/></svg>
+        </button>
         <button class="icon-button" id="messageSearchButton" type="button" aria-label="Search this chat" title="Search this chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+        </button>
+        <button class="icon-button" id="globalVisibilityButton" type="button" aria-label="Choose chats visible in All Messages" title="All Messages visibility" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M7 12h10M10 19h4"/></svg>
         </button>
         <button class="icon-button" id="chatMenuButton" type="button" aria-label="Chat options" title="Chat options">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/></svg>
@@ -65,27 +74,49 @@
       <div class="message-search" id="messageSearchPanel" hidden>
         <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
         <input id="messageSearchInput" type="search" placeholder="Search messages in this chat" autocomplete="off">
+        <select id="messageTypeFilter" aria-label="Filter messages by type">
+          <option value="all">All types</option>
+          <option value="text">Text</option>
+          <option value="image">Images</option>
+          <option value="file">Files</option>
+          <option value="link">Links</option>
+          <option value="sticker">Stickers</option>
+        </select>
+        <select id="messageTagFilter" aria-label="Filter messages by tag"><option value="">All tags</option></select>
+        <label class="date-filter">From <input id="messageDateFrom" type="date" aria-label="Messages from date"></label>
+        <label class="date-filter">To <input id="messageDateTo" type="date" aria-label="Messages to date"></label>
         <span id="searchResultCount"></span>
         <button class="search-nav" id="previousSearchResult" type="button" aria-label="Previous search result" title="Previous result">↑</button>
         <button class="search-nav" id="nextSearchResult" type="button" aria-label="Next search result" title="Next result">↓</button>
         <button id="closeMessageSearch" type="button" aria-label="Close search">×</button>
       </div>
 
+      <div class="pinned-message-banner" id="pinnedMessageBanner" hidden>
+        <button class="pinned-message-copy" id="openPinnedMessage" type="button">
+          <strong id="pinnedMessageLabel">Pinned message</strong>
+          <span id="pinnedMessageText"></span>
+        </button>
+        <span id="pinnedMessageCount"></span>
+        <button id="previousPinnedMessage" type="button" aria-label="Previous pinned message" title="Previous pinned message">‹</button>
+        <button id="nextPinnedMessage" type="button" aria-label="Next pinned message" title="Next pinned message">›</button>
+      </div>
+
       <div class="selection-bar" id="selectionBar" hidden>
         <strong id="selectionCount">1 selected</strong>
         <span></span>
+        <button id="openSelectedButton" type="button" hidden>Open chat</button>
         <button id="copySelectedButton" type="button">Copy</button>
         <button id="moveSelectedButton" type="button">Move</button>
         <button class="danger" id="deleteSelectedButton" type="button">Delete</button>
         <button id="cancelSelectionButton" type="button">Cancel</button>
       </div>
 
-      <section class="message-stage" id="messageStage" aria-label="Messages">
+      <section class="message-stage" id="messageStage" aria-label="Messages" tabindex="-1">
         <div class="empty-state" id="emptyState">
           <div class="empty-avatar" id="emptyAvatar">🏀</div>
           <h1 id="emptyTitle">NBA</h1>
-          <p>This group has one member. Unfortunately, he has takes.</p>
-          <span>Send the first message</span>
+          <p id="emptyDescription">This group has one member. Unfortunately, he has takes.</p>
+          <span id="emptyHint">Send the first message</span>
         </div>
         <div class="message-list" id="messageList" aria-live="polite"></div>
         <div class="message-marquee" id="messageMarquee" aria-hidden="true" hidden></div>
@@ -123,8 +154,31 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 11 17-8-8 17-1-7-8-2Z"/><path d="m11 13 9-10"/></svg>
         </button>
       </form>
-      <div class="keyboard-hint">Ctrl+K switch chats · Ctrl+F find · ↑ edit last · Enter send</div>
+      <div class="keyboard-hint" id="keyboardHint">Ctrl+K find chat · Ctrl+[ / ] switch · Ctrl+1–9 open · Ctrl+F find · Enter send</div>
     </main>
+
+    <aside class="split-conversation" id="splitConversation" aria-label="Split chat view" hidden>
+      <header class="conversation-header split-conversation-header">
+        <div class="chat-avatar" id="splitChatAvatar">💬</div>
+        <div class="split-chat-picker">
+          <label for="splitChatSelect">Alongside</label>
+          <select id="splitChatSelect" aria-label="Choose split-view chat"></select>
+        </div>
+        <button class="icon-button" id="openSplitAsPrimaryButton" type="button" aria-label="Open split chat as primary" title="Swap chats">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7-4 4 4 4M3 11h14M17 5l4 4-4 4M21 9H7"/></svg>
+        </button>
+        <button class="icon-button" id="closeSplitViewButton" type="button" aria-label="Close split chat view" title="Close split view">×</button>
+      </header>
+      <section class="message-stage split-message-stage" id="splitMessageStage" aria-label="Secondary chat messages">
+        <div class="empty-state" id="splitEmptyState">
+          <div class="empty-avatar" id="splitEmptyAvatar">💬</div>
+          <h2 id="splitEmptyTitle">Chat</h2>
+          <p>No messages here yet.</p>
+        </div>
+        <div class="message-list split-message-list" id="splitMessageList" aria-live="polite"></div>
+      </section>
+      <button class="split-primary-action" id="splitPrimaryAction" type="button">Open as primary chat</button>
+    </aside>
   </div>
 
   <section class="single-tab-screen" id="singleTabScreen" role="dialog" aria-modal="true" aria-labelledby="singleTabMessage" hidden>
@@ -152,6 +206,15 @@
         <legend>Pick an icon</legend>
         <div class="emoji-picker" id="emojiPicker"></div>
       </fieldset>
+      <div class="avatar-image-picker">
+        <div class="avatar-preview" id="newChatAvatarPreview" aria-label="Chat icon preview"><span>💬</span></div>
+        <div>
+          <button class="button secondary" id="chooseNewChatAvatarButton" type="button">Choose image</button>
+          <button class="button secondary" id="removeNewChatAvatarButton" type="button" hidden>Use emoji</button>
+          <p>Optional. The image is cropped to a circle and stays in this browser.</p>
+        </div>
+        <input id="newChatAvatarInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
+      </div>
       <div class="dialog-actions">
         <button class="button secondary" id="cancelChatButton" type="button">Cancel</button>
         <button class="button primary" type="submit">Create chat</button>
@@ -163,10 +226,95 @@
     <div class="dialog-card compact">
       <div class="dialog-label">CHAT OPTIONS</div>
       <h2 id="optionsChatName">NBA</h2>
+      <button class="option-row" id="pinChatButton" type="button"><span>Pin chat</span><b>⌖</b></button>
+      <button class="option-row" id="chatNotesOptionsButton" type="button"><span>Chat notes</span><b id="chatNotesStatus">Empty</b></button>
+      <button class="option-row" id="starredMessagesButton" type="button"><span>Starred messages</span><b id="starredMessageCount">0</b></button>
+      <button class="option-row" id="mediaGalleryButton" type="button"><span>Media, links and files</span><b id="mediaGalleryCount">0</b></button>
+      <button class="option-row" id="changeChatAvatarButton" type="button"><span>Change chat icon</span><b>→</b></button>
       <button class="option-row" id="renameChatButton" type="button"><span>Rename chat</span><b>→</b></button>
       <button class="option-row danger" id="deleteChatButton" type="button"><span>Delete chat and messages</span><b>×</b></button>
       <button class="button secondary full" id="closeOptionsButton" type="button">Done</button>
     </div>
+  </dialog>
+
+  <dialog id="chatNotesDialog">
+    <form class="dialog-card chat-notes-card" id="chatNotesForm">
+      <div class="dialog-label">CHAT NOTES</div>
+      <h2 id="chatNotesTitle">Notes</h2>
+      <p class="dialog-copy">Private reference material for this chat, kept outside the message stream.</p>
+      <label for="chatNotesInput">Notes</label>
+      <textarea id="chatNotesInput" rows="12" maxlength="10000" placeholder="Links, project context, recurring instructions…"></textarea>
+      <span class="notes-character-count" id="chatNotesCharacterCount">0 / 10,000</span>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelChatNotesButton" type="button">Cancel</button>
+        <button class="button primary" type="submit">Save notes</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="avatarDialog">
+    <form class="dialog-card" id="avatarForm">
+      <div class="dialog-label">CHAT ICON</div>
+      <h2 id="avatarDialogTitle">Change chat icon</h2>
+      <div class="avatar-editor-preview" id="avatarEditorPreview" aria-label="Chat icon preview"><span>💬</span></div>
+      <fieldset>
+        <legend>Choose an emoji</legend>
+        <div class="emoji-picker" id="avatarEmojiPicker"></div>
+      </fieldset>
+      <div class="avatar-editor-actions">
+        <button class="button secondary" id="chooseAvatarImageButton" type="button">Choose image</button>
+        <button class="button secondary" id="removeAvatarImageButton" type="button">Use emoji</button>
+      </div>
+      <input id="avatarImageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/avif" hidden>
+      <div class="dialog-actions">
+        <button class="button secondary" id="cancelAvatarButton" type="button">Cancel</button>
+        <button class="button primary" type="submit">Save icon</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="starredMessagesDialog" class="wide-dialog">
+    <div class="dialog-card compact">
+      <div class="dialog-label">STARRED MESSAGES</div>
+      <h2 id="starredMessagesTitle">Starred messages</h2>
+      <div class="saved-message-list" id="starredMessagesList"></div>
+      <button class="button secondary full" id="closeStarredMessagesButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="mediaGalleryDialog" class="wide-dialog">
+    <div class="dialog-card media-gallery-card">
+      <div class="dialog-label">CHAT GALLERY</div>
+      <h2 id="mediaGalleryTitle">Media, links and files</h2>
+      <div class="gallery-tabs" id="mediaGalleryTabs" role="tablist">
+        <button type="button" role="tab" data-gallery-tab="image">Media</button>
+        <button type="button" role="tab" data-gallery-tab="file">Files</button>
+        <button type="button" role="tab" data-gallery-tab="link">Links</button>
+      </div>
+      <div class="media-gallery-content" id="mediaGalleryContent"></div>
+      <button class="button secondary full" id="closeMediaGalleryButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="messageTitleDialog">
+    <form class="dialog-card compact" id="messageTitleForm">
+      <div class="dialog-label">MESSAGE TITLE</div>
+      <h2>Name this message</h2>
+      <label for="messageTitleInput">Optional title</label>
+      <input id="messageTitleInput" maxlength="80" placeholder="Quarterly plan, reusable prompt…">
+      <div class="dialog-actions"><button class="button secondary" id="cancelMessageTitleButton" type="button">Cancel</button><button class="button primary" type="submit">Save title</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="messageTagsDialog">
+    <form class="dialog-card compact" id="messageTagsForm">
+      <div class="dialog-label">MESSAGE TAGS</div>
+      <h2>Organize after sending</h2>
+      <label for="messageTagsInput">Tags separated by commas</label>
+      <input id="messageTagsInput" maxlength="260" placeholder="work, prompt, research">
+      <p class="dialog-copy">Up to 10 tags. Tags never interrupt message capture.</p>
+      <div class="dialog-actions"><button class="button secondary" id="cancelMessageTagsButton" type="button">Cancel</button><button class="button primary" type="submit">Save tags</button></div>
+    </form>
   </dialog>
 
   <dialog id="settingsDialog">
@@ -201,6 +349,16 @@
         <button class="button primary" id="confirmMoveButton" type="submit">Move</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="globalVisibilityDialog">
+    <div class="dialog-card compact global-visibility-card">
+      <div class="dialog-label">ALL MESSAGES</div>
+      <h2>Choose visible chats</h2>
+      <p class="dialog-copy">Hidden chats stay unchanged and can be restored here anytime.</p>
+      <div class="global-visibility-list" id="globalVisibilityList"></div>
+      <button class="button secondary full" id="closeGlobalVisibilityButton" type="button">Done</button>
+    </div>
   </dialog>
 
   <dialog id="trashDialog" class="wide-dialog">
@@ -288,15 +446,26 @@
   <div class="context-menu" id="messageContextMenu" hidden>
     <button type="button" data-action="reply">Reply</button>
     <button type="button" data-action="copy">Copy</button>
+    <button type="button" data-action="copy-link">Copy message link</button>
+    <button type="button" data-action="star">Star message</button>
+    <button type="button" data-action="pin">Pin message</button>
+    <button type="button" data-action="title">Rename message</button>
+    <button type="button" data-action="tags">Edit tags</button>
+    <button type="button" data-action="duplicate">Duplicate message</button>
     <button type="button" data-action="edit">Edit</button>
     <button type="button" data-action="select">Select</button>
     <button type="button" data-action="move">Move</button>
     <button class="danger" type="button" data-action="delete">Delete</button>
   </div>
+  <div class="context-menu chat-context-menu" id="chatContextMenu" role="menu" hidden>
+    <button type="button" role="menuitem" data-chat-action="pin">Pin chat</button>
+    <button type="button" role="menuitem" data-chat-action="up">Move up</button>
+    <button type="button" role="menuitem" data-chat-action="down">Move down</button>
+  </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="storage-core.js?v=6"></script>
-  <script src="storage.js?v=6"></script>
-  <script src="app-core.js?v=4"></script>
-  <script src="app.js?v=27"></script>
+  <script src="storage-core.js?v=7"></script>
+  <script src="storage.js?v=7"></script>
+  <script src="app-core.js?v=14"></script>
+  <script src="app.js?v=43"></script>
 </body>
 </html>

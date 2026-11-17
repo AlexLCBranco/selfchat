@@ -94,6 +94,17 @@ test("migration from a v0.9.2 fixture preserves chats, messages, images, and Tra
   assert.equal((await repository.listSnapshots()).length, 1);
 });
 
+test("global visibility metadata persists without changing chat records", async () => {
+  repository = await storage.open(adapters());
+  const before = await repository.load();
+  await repository.setMeta("globalHiddenChatIds", ["topic"]);
+  assert.deepEqual(await repository.getMeta("globalHiddenChatIds"), ["topic"]);
+  assert.deepEqual((await repository.load()).chats, before.chats);
+  repository.close();
+  repository = await storage.open(adapters());
+  assert.deepEqual(repository.metadata.globalHiddenChatIds, ["topic"]);
+});
+
 test("migration reads the active v0.9.2 transactional projection and recovers an image from its verified safety backup", async () => {
   const backupImage = { id: "image-1", name: "one.png", blob: new Blob(["backup-image"], { type: "image/png" }) };
   await seedV092Database(fixture, [backupImage]);
@@ -132,6 +143,62 @@ test("backup export and import round trip preserves state and attachment data", 
   const imported = core.parseBackup(JSON.parse(JSON.stringify(exported)), fallback);
   assert.deepEqual(imported.state, fixture);
   assert.deepEqual(imported.attachments, exported.attachments);
+  assert.equal(exported.schemaVersion, 4);
+});
+
+test("custom chat avatar survives a backup round trip", () => {
+  const withAvatar = core.normalizeState({
+    ...fixture,
+    chats: fixture.chats.map(chat => chat.id === "topic" ? { ...chat, avatarImageId: "avatar-1", updatedAt: "2026-11-14T12:00:00.000Z" } : chat)
+  }, fallback);
+  const exported = core.backupPayload(withAvatar, [{ id: "avatar-1", name: "topic.webp", type: "image/webp", data: "data:image/webp;base64,YXZhdGFy" }]);
+  const imported = core.parseBackup(JSON.parse(JSON.stringify(exported)), fallback);
+  assert.equal(imported.state.chats.find(chat => chat.id === "topic").avatarImageId, "avatar-1");
+  assert.equal(imported.attachments[0].id, "avatar-1");
+});
+
+test("chat pin state survives a backup round trip", () => {
+  const pinned = core.normalizeState({
+    ...fixture,
+    chats: fixture.chats.map(chat => chat.id === "topic" ? {
+      ...chat,
+      pinnedAt: "2026-11-14T12:00:00.000Z",
+      updatedAt: "2026-11-14T12:00:00.000Z"
+    } : chat)
+  }, fallback);
+  const exported = core.backupPayload(pinned, []);
+  const imported = core.parseBackup(JSON.parse(JSON.stringify(exported)), fallback);
+  assert.equal(imported.state.chats.find(chat => chat.id === "topic").pinnedAt, "2026-11-14T12:00:00.000Z");
+});
+
+test("chat-specific notes survive a backup round trip", () => {
+  const withNotes = core.normalizeState({
+    ...fixture,
+    chats: fixture.chats.map(chat => chat.id === "topic" ? {
+      ...chat,
+      note: "Project context\n- Keep this local",
+      noteUpdatedAt: "2026-11-14T13:00:00.000Z",
+      updatedAt: "2026-11-14T13:00:00.000Z"
+    } : chat)
+  }, fallback);
+  const imported = core.parseBackup(JSON.parse(JSON.stringify(core.backupPayload(withNotes, []))), fallback);
+  assert.equal(imported.state.chats.find(chat => chat.id === "topic").note, "Project context\n- Keep this local");
+  assert.equal(imported.state.chats.find(chat => chat.id === "topic").noteUpdatedAt, "2026-11-14T13:00:00.000Z");
+});
+
+test("message star and pin metadata survive a backup round trip", () => {
+  const marked = core.normalizeState({
+    ...fixture,
+    messages: fixture.messages.map(message => ({
+      ...message,
+      starredAt: "2026-11-14T12:00:00.000Z",
+      pinnedAt: "2026-11-14T12:01:00.000Z",
+      updatedAt: "2026-11-14T12:01:00.000Z"
+    }))
+  }, fallback);
+  const imported = core.parseBackup(JSON.parse(JSON.stringify(core.backupPayload(marked, []))), fallback);
+  assert.equal(imported.state.messages[0].starredAt, "2026-11-14T12:00:00.000Z");
+  assert.equal(imported.state.messages[0].pinnedAt, "2026-11-14T12:01:00.000Z");
 });
 
 test("file attachment survives a backup round trip", () => {

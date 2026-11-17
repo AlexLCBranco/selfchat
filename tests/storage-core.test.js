@@ -41,6 +41,13 @@ test("validation catches broken references and missing attachments", () => {
   assert.match(result.errors.join(" "), /unavailable image/);
 });
 
+test("validation reports a missing custom chat avatar", () => {
+  const state = core.normalizeState({ activeChatId: "a", chats: [{ id: "a", name: "A", avatarImageId: "avatar-missing" }], messages: [] }, fallback);
+  const result = core.validateState(state, new Set());
+  assert.equal(result.ok, false);
+  assert.deepEqual(result.missingAttachments, [{ entityType: "chat", entityId: "a", attachmentId: "avatar-missing" }]);
+});
+
 test("migration validation can preserve structurally valid messages while attachments await repair", () => {
   const state = core.normalizeState({ activeChatId: "a", chats: [{ id: "a", name: "A" }], messages: [{ id: "m1", chatId: "a", type: "image", imageId: "missing" }] }, fallback);
   const result = core.validateState(state, new Set(), { allowMissingAttachments: true });
@@ -126,10 +133,11 @@ test("permanent deletion and Empty Trash require explicit operations", () => {
 
 test("attachment references include live, Trash, stickers, and recovery states", () => {
   const ids = core.referencedAttachmentIds({
+    chats: [{ id: "live-chat", avatarImageId: "live-avatar" }],
     messages: [{ imageId: "live" }, { attachmentId: "live-file" }], customStickers: [{ imageId: "sticker" }],
-    trash: [{ payload: { message: { imageId: "trash-message" }, messages: [{ imageId: "trash-chat" }] } }]
-  }, [{ messages: [{ imageId: "recovery" }] }]);
-  assert.deepEqual(ids, new Set(["live", "live-file", "sticker", "trash-message", "trash-chat", "recovery"]));
+    trash: [{ payload: { chat: { avatarImageId: "trash-avatar" }, message: { imageId: "trash-message" }, messages: [{ imageId: "trash-chat" }] } }]
+  }, [{ chats: [{ id: "old-chat", avatarImageId: "recovery-avatar" }], messages: [{ imageId: "recovery" }] }]);
+  assert.deepEqual(ids, new Set(["live-avatar", "live", "live-file", "sticker", "trash-avatar", "trash-message", "trash-chat", "recovery-avatar", "recovery"]));
 });
 
 test("targeted erasure redacts live, Trash, tombstone, draft, and chat payload state", () => {

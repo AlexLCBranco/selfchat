@@ -46,6 +46,171 @@ test("text typed during a slow save survives completion", async () => {
   assert.equal(harness.getInput(), "typed while saving");
 });
 
+test("pinned chats stay above unpinned chats while each group follows latest activity", () => {
+  const chats = [
+    { id: "old-pinned", createdAt: "2026-11-10T10:00:00.000Z", pinnedAt: "2026-11-14T10:00:00.000Z" },
+    { id: "recent", createdAt: "2026-11-13T10:00:00.000Z" },
+    { id: "recent-pinned", createdAt: "2026-11-11T10:00:00.000Z", pinnedAt: "2026-11-12T10:00:00.000Z" },
+    { id: "quiet", createdAt: "2026-11-09T10:00:00.000Z" }
+  ];
+  const messages = [
+    { id: "m1", chatId: "old-pinned", createdAt: "2026-11-12T12:00:00.000Z" },
+    { id: "m2", chatId: "recent-pinned", createdAt: "2026-11-14T12:00:00.000Z" },
+    { id: "m3", chatId: "recent", createdAt: "2026-11-14T13:00:00.000Z" }
+  ];
+  assert.deepEqual(core.sortChatsByPinAndActivity(chats, messages).map(chat => chat.id), [
+    "recent-pinned", "old-pinned", "recent", "quiet"
+  ]);
+});
+
+test("global messages are chronological and group only uninterrupted chat runs", () => {
+  const chats = [{ id: "nba" }, { id: "ai" }];
+  const messages = [
+    { id: "m4", chatId: "nba", createdAt: "2026-11-14T12:04:00.000Z" },
+    { id: "m2", chatId: "nba", createdAt: "2026-11-14T12:02:00.000Z" },
+    { id: "m3", chatId: "ai", createdAt: "2026-11-14T12:03:00.000Z" },
+    { id: "m1", chatId: "nba", createdAt: "2026-11-14T12:01:00.000Z" }
+  ];
+  assert.deepEqual(core.groupGlobalMessages(chats, messages).map(group => ({
+    chatId: group.chatId,
+    messageIds: group.messages.map(message => message.id)
+  })), [
+    { chatId: "nba", messageIds: ["m1", "m2"] },
+    { chatId: "ai", messageIds: ["m3"] },
+    { chatId: "nba", messageIds: ["m4"] }
+  ]);
+});
+
+test("global messages exclude records whose chat is no longer active", () => {
+  const groups = core.groupGlobalMessages([{ id: "active" }], [
+    { id: "live", chatId: "active", createdAt: "2026-11-14T12:00:00.000Z" },
+    { id: "deleted", chatId: "trashed-chat", createdAt: "2026-11-14T12:01:00.000Z" }
+  ]);
+  assert.deepEqual(groups.map(group => group.messages.map(message => message.id)), [["live"]]);
+});
+
+test("global messages exclude every run from hidden chats without changing chronology", () => {
+  const chats = [{ id: "nba" }, { id: "ai" }, { id: "soccer" }];
+  const messages = [
+    { id: "m4", chatId: "nba", createdAt: "2026-11-14T12:04:00.000Z" },
+    { id: "m2", chatId: "ai", createdAt: "2026-11-14T12:02:00.000Z" },
+    { id: "m3", chatId: "soccer", createdAt: "2026-11-14T12:03:00.000Z" },
+    { id: "m1", chatId: "nba", createdAt: "2026-11-14T12:01:00.000Z" }
+  ];
+  const groups = core.groupGlobalMessages(chats, messages, new Set(["nba"]));
+  assert.deepEqual(groups.map(group => ({
+    chatId: group.chatId,
+    messageIds: group.messages.map(message => message.id)
+  })), [
+    { chatId: "ai", messageIds: ["m2"] },
+    { chatId: "soccer", messageIds: ["m3"] }
+  ]);
+});
+
+test("pinning and unpinning update the chat merge timestamp", () => {
+  const chat = { id: "topic", createdAt: "2026-11-10T10:00:00.000Z" };
+  core.setChatPinned(chat, true, "2026-11-14T10:00:00.000Z");
+  assert.equal(chat.pinnedAt, "2026-11-14T10:00:00.000Z");
+  assert.equal(chat.updatedAt, "2026-11-14T10:00:00.000Z");
+  core.setChatPinned(chat, false, "2026-11-14T11:00:00.000Z");
+  assert.equal(chat.pinnedAt, undefined);
+  assert.equal(chat.updatedAt, "2026-11-14T11:00:00.000Z");
+});
+
+test("chat notes normalize line endings, clear cleanly, and update merge metadata", () => {
+  const chat = { id: "topic", createdAt: "2026-11-10T10:00:00.000Z" };
+  core.setChatNote(chat, "Plan\r\n- Ship split view", "2026-11-14T12:00:00.000Z");
+  assert.equal(chat.note, "Plan\n- Ship split view");
+  assert.equal(chat.noteUpdatedAt, "2026-11-14T12:00:00.000Z");
+  assert.equal(chat.updatedAt, "2026-11-14T12:00:00.000Z");
+  core.setChatNote(chat, "   ", "2026-11-14T13:00:00.000Z");
+  assert.equal(chat.note, undefined);
+  assert.equal(chat.updatedAt, "2026-11-14T13:00:00.000Z");
+});
+
+test("split view chooses a different available chat and repairs stale choices", () => {
+  const chats = [{ id: "nba" }, { id: "ai" }, { id: "soccer" }];
+  assert.equal(core.resolveSplitChatId(chats, "nba", "soccer"), "soccer");
+  assert.equal(core.resolveSplitChatId(chats, "nba", "missing"), "ai");
+  assert.equal(core.resolveSplitChatId([{ id: "nba" }], "nba", "ai"), null);
+});
+
+test("manual chat order persists within pin groups without crossing the boundary", () => {
+  const chats = [
+    { id: "p1", pinnedAt: "pin", createdAt: "2026-11-10" },
+    { id: "p2", pinnedAt: "pin", createdAt: "2026-11-11" },
+    { id: "a", createdAt: "2026-11-12" },
+    { id: "b", createdAt: "2026-11-13" },
+    { id: "c", createdAt: "2026-11-14" }
+  ];
+  assert.equal(core.reorderChat(chats, [], "a", "c", "before", "now").length, 3);
+  assert.deepEqual(core.sortChatsByPinAndActivity(chats, []).map(chat => chat.id), ["p2", "p1", "a", "c", "b"]);
+  assert.deepEqual(core.reorderChat(chats, [], "a", "p1", "before", "later"), []);
+  assert.equal(core.moveChatByOffset(chats, [], "b", -1, "later").length > 0, true);
+  assert.deepEqual(core.sortChatsByPinAndActivity(chats, []).map(chat => chat.id), ["p2", "p1", "a", "b", "c"]);
+});
+
+test("new unranked chats appear first inside an already manually ordered group", () => {
+  const chats = [
+    { id: "a", orderIndex: 0, createdAt: "2026-11-12" },
+    { id: "b", orderIndex: 1, createdAt: "2026-11-13" },
+    { id: "new", createdAt: "2026-11-14" }
+  ];
+  assert.deepEqual(core.sortChatsByPinAndActivity(chats, []).map(chat => chat.id), ["new", "a", "b"]);
+});
+
+test("message stars and pins update merge metadata and can be removed independently", () => {
+  const message = { id: "m1", createdAt: "2026-11-14T10:00:00.000Z" };
+  core.setMessageFlag(message, "starredAt", true, "2026-11-14T11:00:00.000Z");
+  core.setMessageFlag(message, "pinnedAt", true, "2026-11-14T12:00:00.000Z");
+  assert.equal(message.starredAt, "2026-11-14T11:00:00.000Z");
+  assert.equal(message.pinnedAt, "2026-11-14T12:00:00.000Z");
+  assert.equal(message.updatedAt, "2026-11-14T12:00:00.000Z");
+  core.setMessageFlag(message, "starredAt", false, "2026-11-14T13:00:00.000Z");
+  assert.equal(message.starredAt, undefined);
+  assert.equal(message.pinnedAt, "2026-11-14T12:00:00.000Z");
+  assert.equal(core.setMessageFlag(message, "unsupported", true, "later"), null);
+});
+
+test("message retrieval filters combine query, type, links, and inclusive dates", () => {
+  const text = { id: "text", text: "Launch notes https://example.com", createdAt: "2026-11-14T10:00:00.000Z" };
+  const image = { id: "image", type: "image", caption: "Launch board", createdAt: "2026-11-13T10:00:00.000Z" };
+  assert.equal(core.messageMatchesFilters(text, { query: "launch", type: "link", dateFrom: "2026-11-14", dateTo: "2026-11-14" }), true);
+  assert.equal(core.messageMatchesFilters(text, { type: "image" }), false);
+  assert.equal(core.messageMatchesFilters(image, { query: "launch", type: "image", dateFrom: "2026-11-13", dateTo: "2026-11-13" }), true);
+  assert.equal(core.messageMatchesFilters(image, { type: "image", dateFrom: "2026-11-14" }), false);
+});
+
+test("date filtering uses the same local calendar day shown in the conversation", () => {
+  const message = { id: "late", text: "Late note", createdAt: "2026-11-09T02:30:00.000Z" };
+  const date = new Date(message.createdAt);
+  const localDay = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  assert.equal(core.messageMatchesFilters(message, { dateFrom: localDay, dateTo: localDay }), true);
+});
+
+test("fenced code parsing preserves prose, language, code, and unterminated text", () => {
+  assert.deepEqual(core.parseFencedCode("Before\n```js\nconst x = 1;\n```\nAfter"), [
+    { type: "text", text: "Before\n" },
+    { type: "code", language: "js", code: "const x = 1;" },
+    { type: "text", text: "\nAfter" }
+  ]);
+  assert.deepEqual(core.parseFencedCode("```not closed"), [{ type: "text", text: "```not closed" }]);
+});
+
+test("message tags normalize and participate in retrieval filters", () => {
+  assert.deepEqual(core.normalizeMessageTags(" Work, #ideas, work, , very-long-tag-name-that-is-truncated "), ["Work", "ideas", "very-long-tag-name-that-"]);
+  const message = { text: "note", tags: ["Work"], createdAt: "2026-11-14" };
+  assert.equal(core.messageMatchesFilters(message, { tag: "work" }), true);
+  assert.equal(core.messageMatchesFilters(message, { tag: "personal" }), false);
+});
+
+test("message duplication preserves reusable content but clears history and transient markers", () => {
+  const original = { id: "old", chatId: "a", text: "reuse", title: "Template", tags: ["work"], createdAt: "old", editedAt: "edit", updatedAt: "update", movedAt: "move", editHistory: [{}], starredAt: "star", pinnedAt: "pin", replyToId: "reply", replyPreview: "preview" };
+  assert.deepEqual(core.duplicateMessage(original, "new", "now"), {
+    id: "new", chatId: "a", text: "reuse", title: "Template", tags: ["work"], createdAt: "now", editedAt: null
+  });
+});
+
 test("Undo restores a deleted message and removes its Trash record", () => {
   const message = { id: "m1", chatId: "topic", text: "keep", createdAt: "2026-11-13T12:00:00.000Z" };
   const state = { messages: [message], trash: [], deletedMessageIds: [] };
@@ -110,6 +275,13 @@ test("copy selected returns clean message text in chronological order", () => {
     { id: "middle", createdAt: "2026-11-13T12:01:00.000Z", text: "Second line" }
   ];
   assert.equal(core.copySelectedText(messages, ["later", "first", "middle"]), "First line\n\nSecond line\n\nnotes.pdf");
+});
+
+test("message copy text preserves newlines and links without changing attachment semantics", () => {
+  assert.equal(core.messagePlainText({ text: "First line\nSecond line\nhttps://example.com/path?q=1" }), "First line\nSecond line\nhttps://example.com/path?q=1");
+  assert.equal(core.messagePlainText({ type: "image", imageName: "photo.png", caption: "Image caption" }), "Image caption");
+  assert.equal(core.messagePlainText({ type: "file", fileName: "notes.pdf" }), "notes.pdf");
+  assert.equal(core.messagePlainText({ type: "sticker" }, "Thumbs up"), "Thumbs up");
 });
 
 test("attachment batch creates image and file messages with one reply binding", () => {

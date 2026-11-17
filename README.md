@@ -1,8 +1,8 @@
 # SelfChat
 
-SelfChat v1.0.2 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v2.3.0 is a private, desktop-first message stream organized into multiple chats containing only you.
 
-It supports fast text entry, replies with quoted context, images, stickers, generic file attachments, local search, drag-marquee message selection, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
+It supports fast text entry, a derived chronological All Messages view with per-chat visibility controls, chat-specific notes, a two-chat desktop split view, pinned and manually ordered chats, titled/tagged/duplicated messages, direct message links, starred and permanently pinned messages, collapsible long messages, fenced code blocks with copy controls, media/link/file galleries, type and date-filtered search, keyboard chat switching, custom local-image chat avatars, replies with quoted context, images, stickers, generic file attachments, local search, File Explorer-style message selection and drag-to-move, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 
 ## Run locally
 
@@ -26,6 +26,7 @@ The domain is attached to the project and follows future production deployments 
 
 - Chats, messages, drafts, Trash, recovery points, images, and attachments are stored in one transactional IndexedDB database.
 - Messages and attachment blobs commit atomically. Ordinary saves write only changed records.
+- Optional custom chat avatars are locally cropped and stored with other attachment blobs; emoji icons remain available as fallbacks.
 - On the first run of this storage version, v0.9.2 data is copied and count-verified before the unified database activates. The old sources remain in place for this version.
 - SelfChat asks the browser for persistent storage. The result is shown in the always-visible data status panel.
 - Message content is not sent to Vercel or another backend.
@@ -38,6 +39,8 @@ The domain is attached to the project and follows future production deployments 
 - Images and generic files can be chosen, pasted, or dropped. Files show their name and size and can be opened or downloaded locally. Attachments are included in manual and automatic backups.
 - Selected messages can be copied as clean chronological text without names or timestamps.
 - Sidebar search finds chats and message content locally, while in-chat search navigates matches in context.
+- Each chat can keep a separate local note outside its message stream. Notes are included in backups, recovery, Trash restore, and permanent erasure with the chat.
+- Split view can keep a second chat visible beside the active composer. The companion pane is read-only and can be swapped into the primary pane without losing the paired view.
 - Deleting a message or chat moves it to Data settings → Trash. Permanent erasure removes matching browser-local history, recovery, migration, and unreferenced attachment copies after an irreversible-action confirmation.
 - Restored messages return to their original chat when it exists, otherwise to Unsorted. Local attachment bytes remain retained while live content, Trash, stickers, recovery points, or safety backups can still reference them.
 - Recovery points are point-in-time restores. SelfChat keeps at most one point per day for 30 days.

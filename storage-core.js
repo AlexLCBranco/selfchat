@@ -160,6 +160,10 @@
     for (const chat of state.chats) {
       if (!chat.id || chatIds.has(chat.id)) errors.push(`Duplicate or missing chat ID: ${chat.id || "(missing)"}`);
       chatIds.add(chat.id);
+      if (chat.avatarImageId && attachmentIds && !attachmentIds.has(chat.avatarImageId)) {
+        missingAttachments.push({ entityType: "chat", entityId: chat.id, attachmentId: chat.avatarImageId });
+        if (!allowMissingAttachments) errors.push(`Chat ${chat.id} has an unavailable avatar`);
+      }
     }
     for (const message of state.messages) {
       if (!message.id || messageIds.has(message.id)) errors.push(`Duplicate or missing message ID: ${message.id || "(missing)"}`);
@@ -189,6 +193,7 @@
   function referencedAttachmentIds(state, recoveryStates = []) {
     const ids = new Set();
     const collect = value => {
+      (value.chats || []).forEach(chat => { if (chat.avatarImageId) ids.add(chat.avatarImageId); });
       (value.messages || []).forEach(message => {
         if (message.imageId) ids.add(message.imageId);
         if (message.attachmentId) ids.add(message.attachmentId);
@@ -196,6 +201,7 @@
       (value.customStickers || []).forEach(sticker => { if (sticker.imageId) ids.add(sticker.imageId); });
       (value.trash || []).forEach(item => {
         const payload = item.payload || {};
+        if (payload.chat?.avatarImageId) ids.add(payload.chat.avatarImageId);
         if (payload.message?.imageId) ids.add(payload.message.imageId);
         if (payload.message?.attachmentId) ids.add(payload.message.attachmentId);
         (payload.messages || []).forEach(message => {
@@ -246,7 +252,7 @@
   function backupPayload(value, attachments, exportedAt = new Date().toISOString()) {
     const state = normalizeState(value, value);
     return {
-      schemaVersion: 3,
+      schemaVersion: 4,
       exportedAt,
       activeChatId: state.activeChatId,
       chats: clone(state.chats),
@@ -261,7 +267,7 @@
   }
 
   function parseBackup(value, fallback) {
-    if (!value || ![undefined, 1, 2, 3].includes(value.schemaVersion) || !Array.isArray(value.chats) || !value.chats.length || !Array.isArray(value.messages)) {
+    if (!value || ![undefined, 1, 2, 3, 4].includes(value.schemaVersion) || !Array.isArray(value.chats) || !value.chats.length || !Array.isArray(value.messages)) {
       throw new Error("Invalid SelfChat backup");
     }
     const attachments = Array.isArray(value.attachments) ? value.attachments : Array.isArray(value.images) ? value.images : [];

@@ -309,6 +309,14 @@
       },
       async purgeEveryCopy(targets, currentState) {
         const snapshots = await repository.listSnapshots();
+        snapshots.forEach(snapshot => {
+          (snapshot.state?.chats || []).forEach(chat => {
+            if (targets.chatIds.has(chat.id) && chat.avatarImageId) targets.imageIds.add(chat.avatarImageId);
+          });
+          (snapshot.state?.trash || []).forEach(item => {
+            if (targets.chatIds.has(item.entityId) && item.payload?.chat?.avatarImageId) targets.imageIds.add(item.payload.chat.avatarImageId);
+          });
+        });
         const redactedSnapshots = snapshots.map(snapshot => {
           const nextState = core.redactState(snapshot.state, targets, adapters.defaultState);
           return { ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length };
