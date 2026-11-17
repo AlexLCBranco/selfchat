@@ -24,6 +24,8 @@ Status flow: Candidate → Approved → Implemented. Keep the original numbering
 | 16 | Keyboard chat switcher | Jump between chats quickly without using the mouse. | Candidate |
 | 17 | Optional message tags | Organize messages after capture, without mandatory categorization. | Candidate |
 
+| 18 | Named timeline sections | Insert optional named or unnamed dividers within a chat to separate trains of thought without creating subchats. V1 proposal: create at end or before an existing message; rename/delete dividers without affecting messages; preserve chronological timeline, composer, date separators, and Global View. Exclude auto-sections, collapsing, nested sections, and section-specific navigation/search. | Candidate |
+
 ## Strongest candidates from the initial discussion
 
 - #6 — Media and file gallery
