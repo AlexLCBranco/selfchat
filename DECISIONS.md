@@ -239,6 +239,6 @@ Reason: cross-topic review and exact-message navigation should be fast without d
 
 ## 2026-11-17 — File Explorer-style message movement
 
-Messages can be selected individually, by Ctrl/Shift click, or with the existing timeline marquee, then dragged as one set onto a sidebar chat. Dragging reuses the established move operation, preserves message IDs, timestamps, metadata, and persistence, and also works from All Messages without changing its derived-view model. This narrowly replaces the earlier “read-only” description of All Messages: it still owns no records and has no composer, but may invoke the same explicit move action on source messages.
+Messages can be selected individually, by Ctrl/Shift click, or with the existing timeline marquee, then dragged as one set onto a sidebar chat. An image message is selected and moved as one complete message with its image, caption, reply context, timestamp, and metadata; the separate image-copy control remains available for copying only the image. Dragging reuses the established move operation, preserves message IDs, timestamps, metadata, and persistence, and also works from All Messages without changing its derived-view model. This narrowly replaces the earlier “read-only” description of All Messages: it still owns no records and has no composer, but may invoke the same explicit move action on source messages.
 
 Reason: moving captured thoughts between topic chats should be as direct and predictable as moving selected files between folders, without adding permanent controls or changing storage semantics.

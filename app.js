@@ -1677,17 +1677,13 @@ function marqueeSelectionKeys(selection, currentContentY) {
   const right = Math.max(selection.startClientX, selection.currentClientX);
   const stageTop = elements.messageStage.getBoundingClientRect().top;
   const hits = new Set();
-  const candidates = [
-    ...elements.messageList.querySelectorAll("[data-message-id]:not(.image-message)"),
-    ...elements.messageList.querySelectorAll("[data-selectable-image-id]")
-  ];
+  const candidates = [...elements.messageList.querySelectorAll("[data-message-id]")];
   candidates.forEach(item => {
     const rect = item.getBoundingClientRect();
     const articleTop = rect.top - stageTop + elements.messageStage.scrollTop;
     const articleBottom = rect.bottom - stageTop + elements.messageStage.scrollTop;
     if (rect.right < left || rect.left > right || articleBottom < top || articleTop > bottom) return;
-    if (item.dataset.selectableImageId) hits.add(`image:${item.dataset.selectableImageId}`);
-    else hits.add(`message:${item.dataset.messageId}`);
+    hits.add(`message:${item.dataset.messageId}`);
   });
   return hits;
 }
@@ -3543,15 +3539,7 @@ elements.messageList.addEventListener("click", async event => {
     return;
   }
   if (hasSelection() && messageArticle && !event.target.closest(".message-menu-trigger")) {
-    const imageFrame = event.target.closest("[data-selectable-image-id]");
-    if (imageFrame && !event.shiftKey && (selectedImageIds.has(imageFrame.dataset.selectableImageId) || event.ctrlKey || event.metaKey)) {
-      const id = imageFrame.dataset.selectableImageId;
-      if (selectedImageIds.has(id)) selectedImageIds.delete(id); else selectedImageIds.add(id);
-      selectionAnchorMessageId = messageArticle.dataset.messageId;
-      updateSelectionUi();
-    } else {
-      selectMessageFromClick(messageArticle.dataset.messageId, event);
-    }
+    selectMessageFromClick(messageArticle.dataset.messageId, event);
     return;
   }
   const replyQuote = event.target.closest(".reply-quote");
@@ -3565,6 +3553,10 @@ elements.messageList.addEventListener("click", async event => {
   const clickedImage = event.target.closest(".message-media");
   if (clickedImage) {
     const messageElement = clickedImage.closest("[data-message-id]");
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      selectMessageFromClick(messageElement?.dataset.messageId, event);
+      return;
+    }
     openImageViewer(messageElement?.dataset.messageId);
     return;
   }
@@ -3644,8 +3636,7 @@ elements.contextMenu.addEventListener("click", async event => {
     startInlineMessageEdit(message.id);
   }
   if (action === "select") {
-    if (message.type === "image" && message.imageId) selectedImageIds.add(message.imageId);
-    else selectedMessageIds.add(message.id);
+    selectedMessageIds.add(message.id);
     closeContextMenu();
     updateSelectionUi();
     showToast("Select more messages, then choose an action");
