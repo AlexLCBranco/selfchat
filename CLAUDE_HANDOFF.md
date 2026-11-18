@@ -4,7 +4,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source version is **v2.7.0**. Production remains **v2.6.0** at `https://selfchat-home.vercel.app` until the pending v2.7.0 release is deployed and verified.
+- The current visible source and production version is **v2.7.0** at `https://selfchat-home.vercel.app` (deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx`).
 - v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing, authorized-device controls, manual encrypted updates, and transactional remote-operation application.
 - SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, attachment transfer, key rotation, permanent-erasure tombstone propagation, or compaction.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
@@ -14,10 +14,10 @@ This file is the persistent implementation-continuity record shared across Codex
 
 - **Implemented:** v2.7.0 SC-20 pairing and remote-application foundation exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 78 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** pending.
-- **Pushed:** pending.
-- **Deployed:** pending; production still serves v2.6.0.
-- **Production verified:** pending for v2.7.0; the last verified production release is v2.6.0.
+- **Committed:** yes. Implementation commit `49e6e85` contains the v2.7.0 source, tests, decisions, backlog, and initial handoff report.
+- **Pushed:** yes. `origin/main` was verified at full commit `49e6e854f069a2f3eea8ccdf1b031e48ad2d5f11` after the implementation push; the final deployment-report commit is synchronized separately.
+- **Deployed:** yes. Deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx` is READY and aliased to `https://selfchat-home.vercel.app`.
+- **Production verified:** yes. An authenticated Vercel fetch returned v2.7.0 and the pairing interface. A browser load/reload at the stable URL preserved the hosted-origin message, displayed one authorized device with automatic transport off, and produced no warnings or errors.
 
 ## SC-20 pairing and remote application — 2026-11-18
 
@@ -121,5 +121,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.4.0 release history remains complete and is superseded in production by v2.5.0.
 - v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- v2.7.0 pairing/remote-application implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - Continue SC-20 with attachment transfer, key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
