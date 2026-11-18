@@ -4,7 +4,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source version is **v2.9.0**. Production remains **v2.8.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1`) until the verified v2.9.0 build is committed, pushed, and deployed.
+- The current visible source and production version is **v2.9.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DjemGgKqsX3DRTFbBbgy8jdZPG2w`).
 - v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import; v2.9.0 adds signed profile-key rotation and durable device revocation.
 - SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, permanent-erasure tombstone propagation, operation compaction, or offline/reconnect integration coverage.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
@@ -14,10 +14,10 @@ This file is the persistent implementation-continuity record shared across Codex
 
 - **Implemented:** v2.9.0 SC-20 profile-key rotation and durable-revocation foundation exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 85 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** pending.
-- **Pushed:** pending.
-- **Deployed:** pending; production still serves v2.8.0.
-- **Production verified:** pending for v2.9.0.
+- **Committed:** yes. Implementation commit `72c53c5` contains the v2.9.0 source, tests, decisions, backlog, and initial handoff report.
+- **Pushed:** yes. `origin/main` was verified at full commit `72c53c5681e5e52ce33fa2d74321ccf431857dbf` after the implementation push; this final delivery-report commit is synchronized separately.
+- **Deployed:** yes. Deployment `dpl_DjemGgKqsX3DRTFbBbgy8jdZPG2w` is READY and aliased to `https://selfchat-home.vercel.app`.
+- **Production verified:** yes. An authenticated Vercel fetch returned v2.9.0 and the key-rotation controls. A browser load/reload preserved all 1,084 hosted-origin messages, displayed key epoch 1, and produced no application console errors.
 
 ## SC-20 profile-key rotation and durable revocation — 2026-11-18
 
@@ -27,6 +27,7 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Durability and UI:** the new key, epoch, rotation provenance, and revocation metadata persist without a database migration or content rewrite. Data settings shows the active epoch, replaces local-only blocking with `Revoke device`, and produces an explicit copy/paste rotation package for every remaining device. Automatic transport remains off.
 - **Adjacent reliability fix:** the service worker now clones cacheable responses before returning them to the page, preventing the previous `Response body is already used` console failures during deferred cache writes.
 - **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 85 automated tests and `git diff --check` passed. The local browser loaded v2.9.0 over the existing profile, retained 2 messages and their attachments through repeated reloads, displayed `key epoch 1` and the revised rotation guidance, closed the pairing panel through Escape, activated the fixed service worker, and produced no application errors. Chrome emitted only its expected custom-install-prompt banner diagnostic.
+- **Production delivery:** implementation commit `72c53c5681e5e52ce33fa2d74321ccf431857dbf` was pushed and verified on `origin/main`. Production deployment `dpl_DjemGgKqsX3DRTFbBbgy8jdZPG2w` reached READY and the stable URL served v2.9.0. Production load/reload preserved all 1,084 hosted-origin messages, showed persisted storage and key epoch 1, and produced no application errors; Chrome emitted only the expected custom-install-prompt banner diagnostic.
 - **Remaining risks:** rotation packages still require manual distribution; a retained device that misses one epoch cannot skip directly to a later package; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
 - **Next recommended step:** implement signed content-free permanent-erasure markers with idempotent cross-device application, then bounded operation compaction and offline/reconnect integration tests before selecting a backend.
 
@@ -145,5 +146,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.8.0 encrypted attachment-package implementation, verification, commit/push, deployment, and production verification are complete.
-- v2.9.0 key-rotation/revocation implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- v2.9.0 key-rotation/revocation implementation, verification, commit/push, deployment, and production verification are complete.
 - Continue SC-20 with permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
