@@ -1,8 +1,10 @@
 # SelfChat
 
-SelfChat v2.3.1 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v2.4.0 is a private, desktop-first message stream organized into multiple chats containing only you.
 
 It supports fast text entry, a derived chronological All Messages view with per-chat visibility controls, chat-specific notes, a two-chat desktop split view, pinned and manually ordered chats, titled/tagged/duplicated messages, direct message links, starred and permanently pinned messages, collapsible long messages, fenced code blocks with copy controls, media/link/file galleries, type and date-filtered search, keyboard chat switching, custom local-image chat avatars, replies with quoted context, images, stickers, generic file attachments, local search, File Explorer-style message selection and drag-to-move, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
+
+The current installability milestone provides a browser-installable offline app shell and an in-app install entry point when the browser exposes one. Windows-specific packaging, a mobile interaction layout, and cross-device synchronization remain future approved work.
 
 ## Run locally
 
@@ -49,14 +51,16 @@ The domain is attached to the project and follows future production deployments 
 
 Open `C:\Users\alexc\Documents\Codex\SelfChat` as the project folder. New Codex chats created for this project share the repository files and automatically receive `AGENTS.md` as persistent guidance.
 
-Use separate chats for bounded topics—product decisions, bugs, features, or deployment—while keeping durable facts in `DECISIONS.md` rather than relying on chat memory.
+Use separate chats for bounded topics—product decisions, bugs, features, or deployment—while keeping durable state in the repository rather than relying on chat memory. `FEATURE_BACKLOG.md` tracks milestone status and remaining work, `CLAUDE_HANDOFF.md` carries implementation continuity and verification results, and `DECISIONS.md` records material product and technical decisions.
 
 ## Project files
 
 - `AGENTS.md` — durable instructions for Codex
 - `DECISIONS.md` — product and technical source of truth
+- `FEATURE_BACKLOG.md` — milestone status and remaining-work source of truth
+- `CLAUDE_HANDOFF.md` — implementation, verification, blocker, and next-step handoff
 - `index.html`, `styles.css`, `app.js`, `app-core.js` — interface and application behavior
 - `storage.js`, `storage-core.js` — unified IndexedDB repository and pure storage logic
 - `tests/` — app, storage, migration, backup, and durability regression tests
 - `server.js` — local static server
-- `service-worker.js`, `manifest.webmanifest`, `icon.svg` — installable app assets
+- `service-worker.js`, `service-worker-core.js`, `manifest.webmanifest`, `icon.svg` — installable offline app assets and testable cache policy

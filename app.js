@@ -88,6 +88,7 @@ const elements = {
   imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption"),
   originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
   exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton"),
+  offlineAppStatus: $("#offlineAppStatus"), installAppButton: $("#installAppButton"), installAppHelp: $("#installAppHelp"),
   confirmationDialog: $("#confirmationDialog"), confirmationForm: $("#confirmationForm"), confirmationTitle: $("#confirmationTitle"),
   confirmationMessage: $("#confirmationMessage"), confirmActionButton: $("#confirmActionButton"),
   replyComposerPreview: $("#replyComposerPreview"), replyComposerText: $("#replyComposerText")
@@ -109,6 +110,7 @@ let marqueeSelection = null;
 let selectionAnchorMessageId = null;
 let messageDrag = null;
 let suppressMessageClick = false;
+let deferredInstallPrompt = null;
 let pendingMoveMessageIds = [];
 let imageRenderToken = 0;
 const imageUrlCache = new Map();
@@ -3176,11 +3178,45 @@ async function renderStorageDiagnostics() {
   elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
 }
 
+function runningAsInstalledApp() {
+  return window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
+}
+
+async function refreshOfflineAppStatus() {
+  if (!("serviceWorker" in navigator)) {
+    elements.offlineAppStatus.textContent = "Offline app support is unavailable in this browser.";
+  } else {
+    const registration = await navigator.serviceWorker.getRegistration().catch(() => null);
+    const connection = navigator.onLine ? "online now" : "offline now";
+    elements.offlineAppStatus.textContent = registration?.active
+      ? `Offline app shell ready · ${connection}`
+      : `Offline app shell is not ready yet · ${connection}`;
+  }
+
+  const installed = runningAsInstalledApp();
+  elements.installAppButton.hidden = installed || !deferredInstallPrompt;
+  elements.installAppHelp.textContent = installed
+    ? "SelfChat is running as an installed app on this device."
+    : deferredInstallPrompt
+      ? "Install this local-first app without moving your existing browser data."
+      : "Use this browser’s app or home-screen menu if installation is available.";
+}
+
 $("#settingsButton").addEventListener("click", () => {
   elements.settingsDialog.showModal();
   renderTrash();
   renderRecoveryPoints();
   renderStorageDiagnostics();
+  refreshOfflineAppStatus();
+});
+elements.installAppButton.addEventListener("click", async () => {
+  if (!deferredInstallPrompt) return refreshOfflineAppStatus();
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  elements.installAppButton.hidden = true;
+  await prompt.prompt();
+  await prompt.userChoice.catch(() => null);
+  await refreshOfflineAppStatus();
 });
 elements.automaticBackupFolderButton.addEventListener("click", async () => {
   if (!("showDirectoryPicker" in window) || !repository) return refreshDataStatus();
@@ -3755,10 +3791,25 @@ document.addEventListener("visibilitychange", () => {
 
 claimThisTab();
 
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  void refreshOfflineAppStatus();
+});
+window.addEventListener("appinstalled", () => {
+  deferredInstallPrompt = null;
+  void refreshOfflineAppStatus();
+});
+window.addEventListener("online", () => void refreshOfflineAppStatus());
+window.addEventListener("offline", () => void refreshOfflineAppStatus());
+
 if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("service-worker.js")
-      .then(registration => registration.update().catch(() => {}))
+      .then(async registration => {
+        await registration.update().catch(() => {});
+        await refreshOfflineAppStatus();
+      })
       .catch(error => console.error("Service worker registration failed", error));
   });
 }

@@ -8,7 +8,7 @@
   <title>SelfChat</title>
   <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=40">
+  <link rel="stylesheet" href="styles.css?v=41">
 </head>
 <body>
   <div class="app" id="app">
@@ -42,7 +42,7 @@
       </div>
       <div class="sidebar-foot">
         <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v2.3.1</span>
+        <span class="app-version" title="SelfChat version">v2.4.0</span>
       </div>
     </aside>
 
@@ -327,6 +327,12 @@
       <label class="option-row file-row" for="importInput"><span>Import backup</span><b>↑</b></label>
       <input id="importInput" type="file" accept="application/json" hidden>
       <button class="option-row" id="openTrashButton" type="button"><span>Trash</span><b id="trashCount">0</b></button>
+      <div class="install-section">
+        <div class="dialog-label">APP &amp; OFFLINE</div>
+        <p id="offlineAppStatus" aria-live="polite">Checking offline availability…</p>
+        <button class="option-row" id="installAppButton" type="button" hidden><span>Install SelfChat</span><b>＋</b></button>
+        <p class="dialog-copy" id="installAppHelp">Installation availability depends on this browser.</p>
+      </div>
       <div class="recovery-section">
         <div class="dialog-label">AUTOMATIC RECOVERY</div>
         <p id="recoveryStatus">Loading recovery points…</p>
@@ -466,6 +472,6 @@
   <script src="storage-core.js?v=7"></script>
   <script src="storage.js?v=7"></script>
   <script src="app-core.js?v=14"></script>
-  <script src="app.js?v=44"></script>
+  <script src="app.js?v=45"></script>
 </body>
 </html>

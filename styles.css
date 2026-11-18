@@ -491,7 +491,10 @@ body.message-dragging, body.message-dragging * { cursor: grabbing !important; us
 .message-link:hover { color: white; }
 @keyframes target-flash { 0%, 35% { box-shadow: 0 0 0 5px rgba(255,227,109,.45); } 100% { box-shadow: 0 1px 1px var(--shadow); } }
 
-.storage-diagnostics { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: #111b21; font-size: 10px; line-height: 1.5; }
+.install-section, .storage-diagnostics { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: #111b21; font-size: 10px; line-height: 1.5; }
+.install-section .option-row { margin-top: 8px; }
+.install-section p { margin: 6px 0 0; }
+.install-section .dialog-copy { font-size: 10px; }
 .dialog-warning { margin: 0; padding: 10px 11px; border-left: 3px solid #f3c969; color: #d9e0e3; background: rgba(243,201,105,.08); font-size: 11px; line-height: 1.5; }
 .chat-notes-card { width: min(650px, calc(100vw - 42px)); }
 .chat-notes-card textarea { min-height: 260px; resize: vertical; line-height: 1.5; }

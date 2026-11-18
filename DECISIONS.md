@@ -242,3 +242,15 @@ Reason: cross-topic review and exact-message navigation should be fast without d
 Messages can be selected individually, by Ctrl/Shift click, or with the existing timeline marquee, then dragged as one set onto a sidebar chat. An image message is selected and moved as one complete message with its image, caption, reply context, timestamp, and metadata; the separate image-copy control remains available for copying only the image. Dragging reuses the established move operation, preserves message IDs, timestamps, metadata, and persistence, and also works from All Messages without changing its derived-view model. This narrowly replaces the earlier “read-only” description of All Messages: it still owns no records and has no composer, but may invoke the same explicit move action on source messages.
 
 Reason: moving captured thoughts between topic chats should be as direct and predictable as moving selected files between folders, without adding permanent controls or changing storage semantics.
+
+## 2026-11-17 — Shared installable offline app foundation
+
+SelfChat uses its web app manifest and service worker as the shared installable offline shell for the approved Windows and mobile initiatives. Installation reuses the browser-local data for the same origin and does not introduce synchronization, accounts, or message transmission. Platform packaging and mobile interaction work remain separate milestones.
+
+Reason: strengthening the existing buildless PWA foundation is reversible and preserves local capture while avoiding premature platform forks or a privacy-boundary change.
+
+## 2026-11-18 — Repository-native development continuity
+
+`FEATURE_BACKLOG.md` is the persistent source of truth for milestone status and remaining work, while `CLAUDE_HANDOFF.md` is the persistent source of truth for implementation details, verification results, blockers, and next steps. Live source remains authoritative for actual behavior, and this file remains authoritative for material product, architecture, privacy, storage, and deployment decisions. Every implementation updates both continuity files and reports Implemented, Tested, Committed, Pushed, and Deployed as separate states. Commits and pushes require approval, and deployments always require explicit approval.
+
+Reason: Codex and ChatGPT sessions must be able to continue from repository history without the user manually transferring implementation reports or risking confusion between local work and released work.

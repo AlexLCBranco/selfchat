@@ -1,6 +1,6 @@
 {
   "name": "selfchat",
-  "version": "2.3.1",
+  "version": "2.4.0",
   "description": "SelfChat is a private, desktop-first message stream organized into multiple chats containing only you.",
   "main": "app.js",
   "directories": {

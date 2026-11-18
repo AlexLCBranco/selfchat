@@ -1,8 +1,10 @@
 # SelfChat feature backlog
 
-This is a list of product ideas for discussion, **not authorization to implement**. All entries start as **Candidate**. Only explicit user approval can move an item to **Approved**; implementation requires a separately authorized, scoped task. Consult `AGENTS.md`, `DECISIONS.md`, and current source before work. Current code is authoritative for behavior; the descriptions below are proposals, not verified specifications.
+This file is the persistent source of truth for SelfChat milestone status and remaining work. It does **not** authorize implementation: all entries start as **Candidate**, only explicit user approval can move an item to **Approved**, and implementation requires a separately authorized, scoped task. Consult `AGENTS.md`, `DECISIONS.md`, `CLAUDE_HANDOFF.md`, and current source before work. Current code is authoritative for actual behavior; this file is authoritative for planning and completion status.
 
 Status flow: Candidate → Approved → Implemented. Use project-prefixed stable IDs (`SC-1`, `SC-2`, etc.) for Codex references; never renumber existing entries. `SC` identifies SelfChat and avoids collisions with other projects.
+
+After every implementation, update the affected milestone status and the active sequence so completed work and remaining work are explicit. Record deployment separately from implementation; an implemented milestone is not necessarily committed, pushed, or deployed.
 
 | ID | Feature | Intended benefit | Status |
 |---|---|---|---|
@@ -26,6 +28,16 @@ Status flow: Candidate → Approved → Implemented. Use project-prefixed stable
 | SC-18 | Named timeline sections | Insert optional named or unnamed dividers within a chat to separate trains of thought without creating subchats. V1 proposal: create at end or before an existing message; rename/delete dividers without affecting messages; preserve chronological timeline, composer, date separators, and Global View. Exclude auto-sections, collapsing, nested sections, and section-specific navigation/search. | Candidate |
 
 | SC-19 | File Explorer-style message selection and drag-to-move | Click to select one message; drag from empty timeline space to marquee-select multiple messages; drag any selected message or selection onto a sidebar groupchat to move using existing move-message rules. Image messages select and move as one complete message with their image, caption, and metadata. Support selection highlights, translucent marquee, drag-count preview, valid-target highlighting, cancel/invalid-drop safety, and Global View. Preserve text selection, attachments, metadata, timestamps, ordering, and persistence; verify current implementation before coding. | Implemented in v2.3.1 |
+| SC-20 | Offline-first storage with automatic cross-device synchronization | Keep local capture fully functional without connectivity, then synchronize chats, messages, organization, Trash, and attachments safely across the user's devices after reconnecting. | Approved |
+| SC-21 | Installable Windows desktop application | Provide a supported Windows installation and app-like launch experience while preserving SelfChat's local-first behavior and data safeguards. | Approved |
+| SC-22 | Installable mobile experience with offline functionality | Make SelfChat installable and usable on supported phones, with a mobile interaction model and reliable offline access to local data. | Approved |
+
+## Active implementation sequence
+
+- **v2.4.0 foundation (implemented, verified, and deployed):** shared browser-installable manifest, offline app-shell hardening, install entry point, and offline-readiness status. Automated and browser verification passed on 2026-11-18. This is prerequisite work for SC-21 and SC-22, but neither feature is complete.
+- **SC-20:** not started. Requires an explicit privacy-preserving sync design covering encryption, device identity, conflict resolution, attachments, deletion semantics, backend boundaries, and migration before implementation.
+- **SC-21:** remains Approved. Windows packaging/support and installation verification remain.
+- **SC-22:** remains Approved. Mobile navigation/layout, touch interaction parity, platform installation guidance, and device testing remain.
 
 ## Strongest candidates from the initial discussion
 

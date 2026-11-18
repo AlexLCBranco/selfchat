@@ -4,7 +4,7 @@
 
 SelfChat is a desktop-first, WhatsApp-like app where every chat contains only the user. Chats separate topics such as NBA, AI tools, and soccer without creating any possibility of messaging another person.
 
-Before changing the project, read `README.md` and `DECISIONS.md`. Treat the live source files and recorded decisions as authoritative; do not infer product requirements from prior chat memory.
+Before changing the project, read `README.md`, `DECISIONS.md`, `FEATURE_BACKLOG.md`, and `CLAUDE_HANDOFF.md`. Treat live source as authoritative for implemented behavior, `DECISIONS.md` as authoritative for durable product and architecture decisions, `FEATURE_BACKLOG.md` as authoritative for milestone status and remaining work, and `CLAUDE_HANDOFF.md` as authoritative for implementation continuity. Do not infer project state from prior chat memory.
 
 ## Product invariants
 
@@ -53,14 +53,17 @@ Before handing off a familiar WhatsApp-like interaction, perform a brief parity 
 - Include the current visible SelfChat version in every implementation or verification report to the user.
 - Read the version from the live source rather than relying on prior chat memory.
 - After every application change, include a clickable link to the deployed SelfChat version. Clearly say when a change has not been deployed yet; do not present the production link as containing an undeployed build.
+- Clearly distinguish whether work is implemented, tested, committed, pushed, and deployed. Never imply that one state guarantees another.
 
 ## Context maintenance
 
+- After every implementation, update `FEATURE_BACKLOG.md` with completed milestones and remaining work.
+- After every implementation, update `CLAUDE_HANDOFF.md` with implementation details, checks that actually ran, blockers, and next steps.
 - Update `DECISIONS.md` only for material product, architecture, privacy, storage, or deployment decisions.
 - Keep recorded decisions concise and include the reason.
 - If a new request contradicts an existing decision, flag the conflict and record the replacement after the user decides.
-- Do not duplicate temporary progress or ordinary implementation details into durable context.
+- Keep temporary narration out of durable context, but preserve the implementation facts needed for another Codex or ChatGPT session to continue without manual transfer.
 
 ## External actions
 
-Git pushes, new remote repositories, production deployments, access changes, credentials, and destructive data operations require explicit user authorization. Local reversible implementation and testing do not.
+Git pushes, new remote repositories, production deployments, access changes, credentials, and destructive data operations require explicit user authorization. When the user approves a commit and push, include the updated backlog and handoff with the implementation. Never deploy without explicit approval. Local reversible implementation and testing do not require approval.
