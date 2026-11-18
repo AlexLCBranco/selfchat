@@ -4,7 +4,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source version is **v2.5.0**. Production remains **v2.4.0** at `https://selfchat-home.vercel.app` (deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu`); v2.5.0 has not been deployed.
+- The current visible source and production version is **v2.5.0** at `https://selfchat-home.vercel.app` (deployment `dpl_zGxZEzmutQ3sCdwLrmqyUAJmh4C9`).
 - v2.5.0 is the first safe implementation milestone for SC-20. It adds only the local synchronization substrate: device identity, logical ordering, durable atomic entity operations, idempotent merge, deterministic conflict selection, and non-destructive schema upgrade/bootstrap.
 - SC-20 remains **Approved / in progress**, not fully Implemented. There is no backend, account, authentication, device enrollment, encryption, network transport, remote-operation application, or attachment transfer.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
@@ -16,7 +16,8 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Tested:** yes. All required syntax checks, 68 automated tests, `git diff --check`, and the browser persistence/error pass described below passed on 2026-11-18.
 - **Committed:** yes. Implementation commit `7267ab4` contains the v2.5.0 source, tests, decisions, backlog, and initial handoff report.
 - **Pushed:** yes. `origin/main` was verified at full commit `7267ab45ecfb95598c603ac758c6664d9d49cb37` after the push.
-- **Deployed:** no. Production intentionally remains v2.4.0; deployment requires explicit authorization.
+- **Deployed:** yes. Deployment `dpl_zGxZEzmutQ3sCdwLrmqyUAJmh4C9` is READY and aliased to `https://selfchat-home.vercel.app`.
+- **Production verified:** yes. An authenticated Vercel fetch returned the v2.5.0 application, and a browser load/reload at the stable URL showed v2.5.0, preserved the existing hosted-origin message, and produced no warnings or errors.
 
 ## SC-20 local foundation — 2026-11-18
 
@@ -37,6 +38,12 @@ This file is the persistent implementation-continuity record shared across Codex
 - Separate approval remains required for destructive or irreversible work; potentially erasing, corrupting, or incompatible data migrations; authentication, encryption, security, or privacy-boundary changes; cloud sync or transmission of existing messages; new infrastructure, credentials, paid services, unexpected costs, material architecture changes, and out-of-scope work.
 - Every persistent handoff must distinguish **Implemented**, **Tested**, **Committed**, **Pushed**, **Deployed**, and **Production verified**. A failed deployment must be reported while preserving the last working production version.
 - This policy supersedes the prior requirement for separate approval of each production deployment and does not authorize unrequested features.
+- **Implemented:** `AGENTS.md`, `DECISIONS.md`, and this handoff now contain the permanent automatic-deployment authorization and safeguards; `FEATURE_BACKLOG.md` records the SC-20 deployment state.
+- **Tested:** all required syntax checks, all 68 automated tests, `git diff --check`, local browser reload/persistence/error verification, authenticated production fetch, and production browser load/reload/error verification passed on 2026-11-18.
+- **Committed:** yes. Policy commit `6f2e87b` records the standing authorization; the subsequent delivery-report commit records the deployment result.
+- **Pushed:** yes. The policy commit was verified on `origin/main`; verify the delivery-report commit at handoff.
+- **Deployed:** yes. The qualifying v2.5.0 SC-20 local foundation was deployed as `dpl_zGxZEzmutQ3sCdwLrmqyUAJmh4C9`.
+- **Production verified:** yes. The stable production URL serves v2.5.0 and passed the production checks above.
 
 ## Prior continuity update — 2026-11-18
 
@@ -87,6 +94,6 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 ## Current blockers and next steps
 
 - No blocker is recorded for maintaining project context.
-- v2.4.0 release, push, deployment, and protected-production verification are complete.
-- v2.5.0 implementation, verification, commit, and push are complete. Do not deploy without explicit authorization.
+- v2.4.0 release history remains complete and is superseded in production by v2.5.0.
+- v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
 - Continue SC-20 with encrypted envelopes, device enrollment, and backend-boundary design; do not add transport before those safeguards and tests exist.
