@@ -437,3 +437,83 @@ test("authorized encrypted updates apply atomically and durable replay cursors r
   await assert.rejects(repository.applyRemoteEnvelope(blockedEnvelope), /not from an authorized device/);
   assert.equal((await repository.load()).chats.some(chat => chat.id === "blocked-chat"), false);
 });
+
+test("encrypted sync packages transfer attachment bytes atomically with their message operations", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "local-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "shared-profile", createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const remote = await syncCrypto.generateDeviceCredentials({ deviceId: "remote-device", crypto: webcrypto });
+  await repository.setMeta("authorizedDevices", [...repository.metadata.authorizedDevices, {
+    deviceId: remote.deviceId,
+    signingPublicJwk: remote.signing.publicJwk,
+    agreementPublicJwk: remote.agreement.publicJwk,
+    authorizedAt: new Date().toISOString(),
+    authorizedBy: "local-device"
+  }]);
+  const recordedAt = "2026-11-18T13:00:00.000Z";
+  const attachment = { id: "remote-file", name: "private.txt", type: "text/plain", blob: new Blob(["encrypted attachment bytes"], { type: "text/plain" }) };
+  const operations = [
+    { id: "remote-device:100", deviceId: "remote-device", counter: 100, store: "attachments", entityType: "attachment", entityId: attachment.id, action: "put", recordedAt, value: { id: attachment.id, name: attachment.name, type: attachment.type, size: attachment.blob.size } },
+    { id: "remote-device:101", deviceId: "remote-device", counter: 101, store: "messages", entityType: "message", entityId: "remote-file-message", action: "put", recordedAt, value: { id: "remote-file-message", chatId: "topic", type: "file", fileId: attachment.id, fileName: attachment.name, fileSize: attachment.blob.size, createdAt: recordedAt } }
+  ];
+  const syncPackage = {
+    version: 1,
+    type: "selfchat-encrypted-sync-package",
+    createdAt: recordedAt,
+    envelope: await syncCrypto.createOperationEnvelope(operations, remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto }),
+    attachments: [await syncCrypto.createEncryptedAttachmentBundle(attachment, remote, repository.metadata.syncProfile, { chunkSize: 1024, crypto: webcrypto })]
+  };
+
+  const result = await repository.applyEncryptedPackage(syncPackage);
+  assert.deepEqual(result, { received: 2, stored: 2, applied: 2, attachmentsStored: 1, deviceId: "remote-device", sequence: 1 });
+  assert.equal((await repository.load()).messages.some(message => message.id === "remote-file-message"), true);
+  assert.equal(await (await repository.getAttachment("remote-file")).blob.text(), "encrypted attachment bytes");
+  assert.equal(repository.metadata.syncReplayCursors["remote-device"], 1);
+});
+
+test("a damaged attachment package commits no operations, message, blob, or replay cursor", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "local-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "shared-profile", createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const remote = await syncCrypto.generateDeviceCredentials({ deviceId: "remote-device", crypto: webcrypto });
+  await repository.setMeta("authorizedDevices", [...repository.metadata.authorizedDevices, { deviceId: remote.deviceId, signingPublicJwk: remote.signing.publicJwk }]);
+  const recordedAt = "2026-11-18T14:00:00.000Z";
+  const attachment = { id: "damaged-file", name: "damaged.bin", type: "application/octet-stream", blob: new Blob(["must not commit"]) };
+  const operations = [
+    { id: "remote-device:200", deviceId: "remote-device", counter: 200, store: "attachments", entityType: "attachment", entityId: attachment.id, action: "put", recordedAt, value: { id: attachment.id, name: attachment.name, type: attachment.type, size: attachment.blob.size } },
+    { id: "remote-device:201", deviceId: "remote-device", counter: 201, store: "messages", entityType: "message", entityId: "damaged-message", action: "put", recordedAt, value: { id: "damaged-message", chatId: "topic", type: "file", fileId: attachment.id, createdAt: recordedAt } }
+  ];
+  const bundle = await syncCrypto.createEncryptedAttachmentBundle(attachment, remote, repository.metadata.syncProfile, { chunkSize: 1024, crypto: webcrypto });
+  bundle.chunks[0].ciphertext = `${bundle.chunks[0].ciphertext.slice(0, -1)}A`;
+  const syncPackage = { version: 1, type: "selfchat-encrypted-sync-package", envelope: await syncCrypto.createOperationEnvelope(operations, remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto }), attachments: [bundle] };
+  const beforeOperations = (await repository.listOperations()).length;
+
+  await assert.rejects(repository.applyEncryptedPackage(syncPackage), /signature is invalid/);
+  assert.equal((await repository.listOperations()).length, beforeOperations);
+  assert.equal((await repository.load()).messages.some(message => message.id === "damaged-message"), false);
+  assert.equal(await repository.getAttachment("damaged-file"), undefined);
+  assert.equal(repository.metadata.syncReplayCursors?.["remote-device"], undefined);
+});
+
+test("creating an encrypted package includes current local attachments without plaintext bytes", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "local-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "shared-profile", createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const syncPackage = await repository.createEncryptedPackage();
+  assert.equal(syncPackage.type, "selfchat-encrypted-sync-package");
+  assert.equal(syncPackage.attachments.length, 1);
+  assert.equal(JSON.stringify(syncPackage).includes('"image"'), false);
+  assert.equal(repository.metadata.outboundEnvelopeSequence, 1);
+});

@@ -42,7 +42,7 @@
       </div>
       <div class="sidebar-foot">
         <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v2.7.0</span>
+        <span class="app-version" title="SelfChat version">v2.8.0</span>
       </div>
     </aside>
 
@@ -357,7 +357,10 @@
       <input id="pairingDeviceLabel" maxlength="80" placeholder="Main PC">
       <div class="pairing-actions">
         <button class="button secondary" id="createPairingInvitationButton" type="button">Create invitation</button>
-        <button class="button secondary" id="createEncryptedUpdateButton" type="button">Create encrypted update</button>
+        <button class="button secondary" id="createEncryptedUpdateButton" type="button">Create text update</button>
+        <button class="button primary" id="downloadEncryptedPackageButton" type="button">Download package with attachments</button>
+        <label class="button secondary" for="encryptedPackageInput">Import encrypted package</label>
+        <input id="encryptedPackageInput" type="file" accept="application/json,.json" hidden>
       </div>
       <div class="pairing-output" id="pairingOutput" hidden>
         <strong id="pairingOutputTitle">Pairing data ready</strong>
@@ -365,8 +368,8 @@
         <textarea id="pairingOutputText" rows="6" readonly aria-label="Generated pairing data"></textarea>
         <button class="button primary" id="copyPairingOutputButton" type="button">Copy generated text</button>
       </div>
-      <label for="pairingInputText">Paste invitation, request, grant, or encrypted update</label>
-      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing or encrypted update text here"></textarea>
+      <label for="pairingInputText">Paste invitation, request, grant, or text-only encrypted update</label>
+      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing or text-only encrypted update here"></textarea>
       <button class="button primary full" id="processPairingInputButton" type="button">Process pasted text</button>
       <p class="pairing-result" id="pairingResult" aria-live="polite"></p>
       <div class="paired-device-section">
@@ -505,10 +508,10 @@
   </div>
   <div class="toast" id="toast" role="status"></div>
   <script src="storage-core.js?v=9"></script>
-  <script src="sync-crypto.js?v=2"></script>
+  <script src="sync-crypto.js?v=3"></script>
   <script src="sync-backend.js?v=1"></script>
-  <script src="storage.js?v=9"></script>
+  <script src="storage.js?v=10"></script>
   <script src="app-core.js?v=14"></script>
-  <script src="app.js?v=47"></script>
+  <script src="app.js?v=48"></script>
 </body>
 </html>

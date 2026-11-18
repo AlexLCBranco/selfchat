@@ -308,3 +308,11 @@ Paired devices can manually exchange signed encrypted operation envelopes for te
 Device blocking is intentionally local in v2.7.0 and is labeled as such. It rejects future envelopes on that browser but does not claim cryptographic revocation because the blocked device still knows the shared profile key. Automatic transport, key rotation, attachment chunks, permanent-erasure tombstones, and compaction remain disabled or unimplemented.
 
 Reason: the enrollment and remote-application boundary must be usable and transactionally testable before backend selection, while revocation limitations must stay explicit rather than creating a false security guarantee.
+
+## 2026-11-18 — SC-20 encrypted attachment packages
+
+Attachment transfer is first exposed as an explicit local file package rather than automatic network transport. A package combines the existing signed encrypted operation envelope with current winning attachment references from that device. Blob bytes are split into independently authenticated AES-256-GCM chunks, and the device signs the manifest, sealed whole-file integrity metadata, and every ciphertext chunk. Filenames and MIME types remain inside the encrypted operation envelope rather than the outer chunk manifest.
+
+Import accepts only the authorized unblocked device and matching sync profile, requires exactly one bundle for every current attachment put reference, verifies chunk count, order, length, AEAD authentication, signature, reference size, and reconstructed SHA-256 digest, and performs no IndexedDB mutation until all bundles pass. Winning blobs then commit atomically with operations, materialized records, logical clock, and replay cursor. Version 2.8.0 adds no endpoint, account, background transfer, or automatic transport.
+
+Reason: attachment integrity and transactional no-partial-commit behavior must be proven independently of backend selection, while an explicit direct-transfer package lets paired-device behavior be exercised without expanding the hosted application's transmission boundary.

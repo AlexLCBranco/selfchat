@@ -83,7 +83,7 @@ const elements = {
   pairingDialog: $("#pairingDialog"), pairingDeviceLabel: $("#pairingDeviceLabel"), pairingInputText: $("#pairingInputText"),
   pairingOutput: $("#pairingOutput"), pairingOutputTitle: $("#pairingOutputTitle"), pairingOutputText: $("#pairingOutputText"),
   pairingVerificationCode: $("#pairingVerificationCode"), pairingResult: $("#pairingResult"), authorizedDeviceList: $("#authorizedDeviceList"),
-  syncDeviceStatus: $("#syncDeviceStatus"),
+  syncDeviceStatus: $("#syncDeviceStatus"), encryptedPackageInput: $("#encryptedPackageInput"),
   recoveryList: $("#recoveryList"), recoveryStatus: $("#recoveryStatus"),
   storageDiagnostics: $("#storageDiagnostics"), recoveryPreviewDialog: $("#recoveryPreviewDialog"), recoveryPreviewSummary: $("#recoveryPreviewSummary"),
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
@@ -3291,9 +3291,43 @@ $("#createEncryptedUpdateButton").addEventListener("click", async () => {
   try {
     const envelope = await repository.createEncryptedUpdate();
     showPairingOutput("Encrypted update ready", envelope);
-    elements.pairingResult.textContent = "Paste this text on an authorized device. Message content is encrypted.";
+    elements.pairingResult.textContent = "Paste this on an authorized device. Message content is encrypted; attachment bytes are not included.";
   } catch (error) {
     elements.pairingResult.textContent = error.message;
+  }
+});
+$("#downloadEncryptedPackageButton").addEventListener("click", async event => {
+  const button = event.currentTarget;
+  button.disabled = true;
+  try {
+    const syncPackage = await repository.createEncryptedPackage();
+    const blob = new Blob([JSON.stringify(syncPackage)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `selfchat-sync-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    const count = syncPackage.attachments.length;
+    elements.pairingResult.textContent = `Encrypted package downloaded with ${count} attachment${count === 1 ? "" : "s"}. Automatic transport remains off.`;
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+elements.encryptedPackageInput.addEventListener("change", async () => {
+  const file = elements.encryptedPackageInput.files[0];
+  if (!file) return;
+  try {
+    const result = await repository.applyEncryptedPackage(JSON.parse(await file.text()));
+    await reloadRemoteState();
+    elements.pairingResult.textContent = `Applied ${result.applied} authenticated operation${result.applied === 1 ? "" : "s"} and stored ${result.attachmentsStored} attachment${result.attachmentsStored === 1 ? "" : "s"}.`;
+    renderSyncDeviceStatus();
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  } finally {
+    elements.encryptedPackageInput.value = "";
   }
 });
 $("#copyPairingOutputButton").addEventListener("click", async () => {
@@ -3323,12 +3357,16 @@ $("#processPairingInputButton").addEventListener("click", async () => {
       elements.pairingOutput.hidden = true;
       elements.pairingResult.textContent = `Paired successfully with profile ${shortDeviceId(result.profileId)}.`;
       renderAuthorizedDevices();
+    } else if (payload.type === "selfchat-encrypted-sync-package") {
+      const result = await repository.applyEncryptedPackage(payload);
+      await reloadRemoteState();
+      elements.pairingResult.textContent = `Applied ${result.applied} authenticated operation${result.applied === 1 ? "" : "s"} and stored ${result.attachmentsStored} attachment${result.attachmentsStored === 1 ? "" : "s"}.`;
     } else if (payload.header?.type === "selfchat-operation-envelope") {
       const result = await repository.applyRemoteEnvelope(payload);
       await reloadRemoteState();
       elements.pairingResult.textContent = `Applied ${result.applied} of ${result.received} authenticated operation${result.received === 1 ? "" : "s"}.`;
     } else {
-      throw new Error("This is not recognized SelfChat pairing or encrypted update text");
+      throw new Error("This is not recognized SelfChat pairing or encrypted update data");
     }
     elements.pairingInputText.value = "";
     renderSyncDeviceStatus();

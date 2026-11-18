@@ -4,20 +4,30 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source and production version is **v2.7.0** at `https://selfchat-home.vercel.app` (deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx`).
-- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing, authorized-device controls, manual encrypted updates, and transactional remote-operation application.
-- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, attachment transfer, key rotation, permanent-erasure tombstone propagation, or compaction.
+- The current visible source version is **v2.8.0**. Production remains **v2.7.0** at `https://selfchat-home.vercel.app` (deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx`) until the verified v2.8.0 release is pushed and deployed.
+- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import.
+- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, key rotation, permanent-erasure tombstone propagation, or compaction.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
 - `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
 
 ## Delivery state
 
-- **Implemented:** v2.7.0 SC-20 pairing and remote-application foundation exists in the current working tree.
-- **Tested:** yes. All required syntax checks, 78 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** yes. Implementation commit `49e6e85` contains the v2.7.0 source, tests, decisions, backlog, and initial handoff report.
-- **Pushed:** yes. `origin/main` was verified at full commit `49e6e854f069a2f3eea8ccdf1b031e48ad2d5f11` after the implementation push; the final deployment-report commit is synchronized separately.
-- **Deployed:** yes. Deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx` is READY and aliased to `https://selfchat-home.vercel.app`.
-- **Production verified:** yes. An authenticated Vercel fetch returned v2.7.0 and the pairing interface. A browser load/reload at the stable URL preserved the hosted-origin message, displayed one authorized device with automatic transport off, and produced no warnings or errors.
+- **Implemented:** v2.8.0 SC-20 encrypted attachment-package foundation exists in the current working tree.
+- **Tested:** yes. All required syntax checks, 83 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
+- **Committed:** not yet for v2.8.0.
+- **Pushed:** not yet for v2.8.0.
+- **Deployed:** not yet for v2.8.0; production remains on the verified v2.7.0 deployment.
+- **Production verified:** not yet for v2.8.0.
+
+## SC-20 encrypted attachment packages — 2026-11-18
+
+- **Chunk encryption and privacy:** attachment bytes are split into 256 KiB chunks, each encrypted independently with AES-256-GCM and authenticated additional data binding the package manifest and exact index. Filenames and MIME types stay in the encrypted operation envelope rather than the outer manifest. A separately encrypted whole-file SHA-256 digest verifies reconstruction without exposing the fingerprint in package metadata.
+- **Authenticated transfer:** the sending device signs the manifest, sealed integrity record, and every ciphertext chunk. Import requires the same authorized, unblocked signer and sync profile as the operation envelope, plus an exact attachment-reference ID and size match.
+- **Atomic application:** all bundles are decrypted and verified before IndexedDB mutation. Winning attachment blobs then commit in the same transaction as fresh immutable operations, materialized records, Lamport-clock advancement, and replay-cursor advancement. Missing, extra, duplicate, reordered, truncated, tampered, wrong-profile, or wrong-signer data is rejected without partial state.
+- **Manual UI path:** the pairing panel distinguishes copyable text-only updates from a downloadable package containing attachments. Package download and import are explicit user actions; no endpoint, account, adapter, automatic transport, or background transfer is enabled.
+- **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 83 tests and `git diff --check` passed. The local browser loaded v2.8.0 over the existing profile, retained 8 messages and 3 attachments, displayed both package controls, downloaded a package with 3 encrypted attachments, re-imported it without duplicating operations, closed through Escape, retained all data after reload, and logged no warnings or errors.
+- **Remaining risks:** manual packages still contain complete local-device operation history; blocking still lacks profile-key rotation; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
+- **Next recommended step:** implement profile-key rotation with durable device revocation, followed by content-free permanent-erasure markers, compaction, and offline/reconnect integration coverage before backend selection.
 
 ## SC-20 pairing and remote application — 2026-11-18
 
@@ -81,7 +91,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Architecture and privacy boundary
 
-- `selfchat-unified-v1` remains the only active data source. Source v2.7.0 retains IndexedDB schema version 2 and adds pairing/replay metadata without replacing or clearing existing records.
+- `selfchat-unified-v1` remains the only active data source. Source v2.8.0 retains IndexedDB schema version 2 and adds no migration or destructive rewrite.
 - Device ID, profile key, and private device credentials remain browser-local metadata, not an account. Lamport order is deterministic but does not claim wall-clock chronology.
 - Operation payloads remain local plaintext inside the existing browser privacy boundary and can be transformed into signed encrypted envelopes for future transport. Attachment operations contain references and metadata, while blob bytes stay in `attachments`.
 - The installed app uses the same browser profile and origin data. It does not copy, upload, or synchronize message content.
@@ -122,4 +132,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- Continue SC-20 with attachment transfer, key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
+- v2.8.0 encrypted attachment-package implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- Continue SC-20 with key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.

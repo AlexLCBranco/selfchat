@@ -1,7 +1,7 @@
 importScripts("service-worker-core.js?v=1");
 
-const CACHE_NAME = "selfchat-v58";
-const FILES = ["./", "index.html", "styles.css?v=42", "storage-core.js?v=9", "sync-crypto.js?v=2", "sync-backend.js?v=1", "storage.js?v=9", "app-core.js?v=14", "app.js?v=47", "service-worker-core.js?v=1", "icon.svg?v=3", "manifest.webmanifest"];
+const CACHE_NAME = "selfchat-v59";
+const FILES = ["./", "index.html", "styles.css?v=42", "storage-core.js?v=9", "sync-crypto.js?v=3", "sync-backend.js?v=1", "storage.js?v=10", "app-core.js?v=14", "app.js?v=48", "service-worker-core.js?v=1", "icon.svg?v=3", "manifest.webmanifest"];
 self.addEventListener("install", event => event.waitUntil(Promise.all([
   caches.open(CACHE_NAME).then(cache => cache.addAll(FILES)),
   self.skipWaiting()

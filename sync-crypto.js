@@ -6,6 +6,9 @@
   "use strict";
 
   const ENVELOPE_VERSION = 1;
+  const ATTACHMENT_BUNDLE_VERSION = 1;
+  const DEFAULT_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
+  const MAX_ATTACHMENT_CHUNKS = 10000;
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
 
@@ -238,6 +241,104 @@
     return cryptoApi(cryptoOverride).subtle.importKey("raw", base64UrlDecode(profileKey), { name: "AES-GCM" }, false, [usage]);
   }
 
+  async function attachmentBytes(value) {
+    if (value instanceof Uint8Array) return value;
+    if (value instanceof ArrayBuffer) return new Uint8Array(value);
+    if (ArrayBuffer.isView(value)) return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    if (value?.arrayBuffer) return new Uint8Array(await value.arrayBuffer());
+    throw new Error("Attachment bytes are unavailable");
+  }
+
+  function attachmentChunkAad(manifest, index) {
+    return bytes(stableStringify({ manifest, index }));
+  }
+
+  async function createEncryptedAttachmentBundle(record, credentials, profile, {
+    chunkSize = DEFAULT_ATTACHMENT_CHUNK_SIZE,
+    createdAt = new Date().toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    if (!record?.id || !record.blob) throw new Error("An attachment record with bytes is required");
+    if (!Number.isSafeInteger(chunkSize) || chunkSize < 1024 || chunkSize > 4 * 1024 * 1024) throw new Error("Attachment chunk size is invalid");
+    const api = cryptoApi(cryptoOverride);
+    const content = await attachmentBytes(record.blob);
+    const chunkCount = Math.max(1, Math.ceil(content.byteLength / chunkSize));
+    if (chunkCount > MAX_ATTACHMENT_CHUNKS) throw new Error("Attachment requires too many encrypted chunks");
+    const manifest = {
+      version: ATTACHMENT_BUNDLE_VERSION,
+      type: "selfchat-attachment-bundle",
+      profileId: profile.id,
+      deviceId: credentials.deviceId,
+      attachmentId: record.id,
+      size: content.byteLength,
+      chunkSize,
+      chunkCount,
+      createdAt
+    };
+    const key = await importProfileKey(profile.keyMaterial, "encrypt", api);
+    const chunks = [];
+    for (let index = 0; index < chunkCount; index += 1) {
+      const iv = randomBytes(12, api);
+      const start = index * chunkSize;
+      const plaintext = content.slice(start, Math.min(content.byteLength, start + chunkSize));
+      const ciphertext = await api.subtle.encrypt({ name: "AES-GCM", iv, additionalData: attachmentChunkAad(manifest, index) }, key, plaintext);
+      chunks.push({ index, iv: base64UrlEncode(iv), ciphertext: base64UrlEncode(ciphertext) });
+    }
+    const integrityIv = randomBytes(12, api);
+    const contentHash = base64UrlEncode(await sha256(content, api));
+    const integrityCiphertext = await api.subtle.encrypt({ name: "AES-GCM", iv: integrityIv, additionalData: bytes(stableStringify(manifest)) }, key, bytes(stableStringify({ contentHash })));
+    const signed = {
+      manifest,
+      integrity: { iv: base64UrlEncode(integrityIv), ciphertext: base64UrlEncode(integrityCiphertext) },
+      chunks
+    };
+    return { ...signed, signature: await sign(signed, credentials.signing.privateJwk, api) };
+  }
+
+  async function openEncryptedAttachmentBundle(bundle, profile, authorizedDevice, expected = {}, {
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    const { signature, ...signed } = bundle || {};
+    const manifest = signed.manifest || {};
+    if (manifest.version !== ATTACHMENT_BUNDLE_VERSION || manifest.type !== "selfchat-attachment-bundle") throw new Error("Unsupported attachment bundle");
+    if (manifest.profileId !== profile.id) throw new Error("Attachment bundle belongs to another sync profile");
+    if (manifest.deviceId !== authorizedDevice?.deviceId) throw new Error("Attachment bundle signer is not authorized for the claimed device");
+    if (!manifest.attachmentId || manifest.attachmentId !== expected.id) throw new Error("Attachment bundle does not match its encrypted reference");
+    if (!Number.isSafeInteger(manifest.size) || manifest.size < 0 || manifest.size !== Number(expected.size)) throw new Error("Attachment bundle size does not match its encrypted reference");
+    if (!Number.isSafeInteger(manifest.chunkSize) || manifest.chunkSize < 1024 || manifest.chunkSize > 4 * 1024 * 1024) throw new Error("Attachment bundle chunk size is invalid");
+    if (!Number.isSafeInteger(manifest.chunkCount) || manifest.chunkCount < 1 || manifest.chunkCount > MAX_ATTACHMENT_CHUNKS) throw new Error("Attachment bundle chunk count is invalid");
+    if (!Array.isArray(signed.chunks) || signed.chunks.length !== manifest.chunkCount) throw new Error("Attachment bundle is missing encrypted chunks");
+    if (!(await verify(signed, signature, authorizedDevice.signingPublicJwk, api))) throw new Error("Attachment bundle signature is invalid");
+    const key = await importProfileKey(profile.keyMaterial, "decrypt", api);
+    const integrityPlaintext = await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(signed.integrity?.iv), additionalData: bytes(stableStringify(manifest)) }, key, base64UrlDecode(signed.integrity?.ciphertext));
+    const integrity = JSON.parse(decoder.decode(integrityPlaintext));
+    const plaintextChunks = [];
+    let totalSize = 0;
+    for (let index = 0; index < signed.chunks.length; index += 1) {
+      const chunk = signed.chunks[index];
+      if (chunk?.index !== index) throw new Error("Attachment bundle chunks are missing, duplicated, or out of order");
+      const plaintext = new Uint8Array(await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(chunk.iv), additionalData: attachmentChunkAad(manifest, index) }, key, base64UrlDecode(chunk.ciphertext)));
+      const expectedLength = index === manifest.chunkCount - 1 ? manifest.size - (index * manifest.chunkSize) : manifest.chunkSize;
+      if (plaintext.byteLength !== expectedLength) throw new Error("Attachment bundle chunk length is invalid");
+      totalSize += plaintext.byteLength;
+      plaintextChunks.push(plaintext);
+    }
+    if (totalSize !== manifest.size) throw new Error("Attachment bundle size is invalid");
+    const content = new Uint8Array(totalSize);
+    let offset = 0;
+    plaintextChunks.forEach(chunk => { content.set(chunk, offset); offset += chunk.byteLength; });
+    const actualHash = base64UrlEncode(await sha256(content, api));
+    if (integrity?.contentHash !== actualHash) throw new Error("Attachment bundle integrity check failed");
+    return {
+      id: expected.id,
+      name: expected.name || "",
+      type: expected.type || "",
+      size: manifest.size,
+      blob: new Blob([content], { type: expected.type || "" })
+    };
+  }
+
   async function createOperationEnvelope(operations, credentials, profile, {
     sequence,
     createdAt = new Date().toISOString(),
@@ -285,6 +386,8 @@
 
   return {
     ENVELOPE_VERSION,
+    ATTACHMENT_BUNDLE_VERSION,
+    DEFAULT_ATTACHMENT_CHUNK_SIZE,
     stableStringify,
     base64UrlEncode,
     base64UrlDecode,
@@ -297,6 +400,8 @@
     pairingVerificationCode,
     issueEnrollmentGrant,
     acceptEnrollmentGrant,
+    createEncryptedAttachmentBundle,
+    openEncryptedAttachmentBundle,
     createOperationEnvelope,
     openOperationEnvelope
   };

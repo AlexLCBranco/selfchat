@@ -92,3 +92,43 @@ test("pairing invitations are signed, short-lived, and have a stable comparison 
   assert.equal(await syncCrypto.verifyPairingInvitation({ ...invitation, profileId: "attacker" }, { now: Date.parse("2026-11-18T12:05:00.000Z"), crypto: webcrypto }), false);
   assert.match(await syncCrypto.pairingVerificationCode(invitation, webcrypto), /^[A-Z0-9_-]{4}-[A-Z0-9_-]{4}-[A-Z0-9_-]{4}$/);
 });
+
+test("attachment bundles encrypt multiple chunks and restore bytes only after integrity verification", async () => {
+  const credentials = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const profile = { id: "profile-1", keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const secret = "private attachment phrase ".repeat(140);
+  const record = { id: "file-1", name: "notes.txt", type: "text/plain", size: secret.length, blob: new Blob([secret], { type: "text/plain" }) };
+  const bundle = await syncCrypto.createEncryptedAttachmentBundle(record, credentials, profile, {
+    chunkSize: 1024,
+    createdAt: "2026-11-18T12:00:00.000Z",
+    crypto: webcrypto
+  });
+
+  assert.equal(bundle.chunks.length > 1, true);
+  assert.equal(JSON.stringify(bundle).includes("private attachment phrase"), false);
+  assert.equal(JSON.stringify(bundle).includes("notes.txt"), false);
+  const opened = await syncCrypto.openEncryptedAttachmentBundle(bundle, profile, {
+    deviceId: credentials.deviceId,
+    signingPublicJwk: credentials.signing.publicJwk
+  }, { id: record.id, name: record.name, type: record.type, size: record.blob.size }, { crypto: webcrypto });
+  assert.equal(await opened.blob.text(), secret);
+  assert.equal(opened.name, "notes.txt");
+  assert.equal(opened.type, "text/plain");
+});
+
+test("attachment bundles reject tampering, missing or reordered chunks, wrong profiles, and wrong signers", async () => {
+  const credentials = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const impostor = await syncCrypto.generateDeviceCredentials({ deviceId: "device-b", crypto: webcrypto });
+  const profile = { id: "profile-1", keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const record = { id: "file-1", name: "file.bin", type: "application/octet-stream", blob: new Blob([new Uint8Array(2500)]) };
+  const expected = { id: record.id, name: record.name, type: record.type, size: record.blob.size };
+  const authorized = { deviceId: credentials.deviceId, signingPublicJwk: credentials.signing.publicJwk };
+  const bundle = await syncCrypto.createEncryptedAttachmentBundle(record, credentials, profile, { chunkSize: 1024, crypto: webcrypto });
+
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: bundle.chunks.slice(1) }, profile, authorized, expected, { crypto: webcrypto }), /missing encrypted chunks/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: [bundle.chunks[1], bundle.chunks[0], ...bundle.chunks.slice(2)] }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: [bundle.chunks[0], bundle.chunks[0], ...bundle.chunks.slice(2)] }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, integrity: { ...bundle.integrity, ciphertext: `${bundle.integrity.ciphertext.slice(0, -1)}A` } }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle(bundle, { ...profile, id: "other-profile" }, authorized, expected, { crypto: webcrypto }), /another sync profile/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle(bundle, profile, { deviceId: credentials.deviceId, signingPublicJwk: impostor.signing.publicJwk }, expected, { crypto: webcrypto }), /signature is invalid/);
+});

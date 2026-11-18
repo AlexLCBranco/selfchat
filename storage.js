@@ -388,6 +388,72 @@
       if (operation.action === "delete") store.delete(operation.entityId);
       else store.put(operation.value);
     }
+    async function applyRemotePayload(envelope, attachmentBundles = null) {
+      const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt);
+      if (!device) throw new Error("Encrypted update is not from an authorized device");
+      const cursors = { ...(metadata.syncReplayCursors || {}) };
+      const opened = await syncCrypto.openOperationEnvelope(envelope, metadata.syncProfile, device, {
+        minimumSequence: Number(cursors[device.deviceId]) || 0
+      });
+      const incoming = core.validateRemoteSyncOperations(opened.operations, device.deviceId);
+      let attachmentRecords = [];
+      if (attachmentBundles) {
+        if (!Array.isArray(attachmentBundles)) throw new Error("Encrypted sync package attachments are invalid");
+        const attachmentReferences = core.resolveSyncConflicts(incoming)
+          .filter(operation => operation.store === "attachments" && operation.action === "put");
+        const referencesById = new Map(attachmentReferences.map(operation => [operation.entityId, operation]));
+        const bundleIds = new Set();
+        for (const bundle of attachmentBundles) {
+          const attachmentId = bundle?.manifest?.attachmentId;
+          if (!attachmentId || bundleIds.has(attachmentId)) throw new Error("Encrypted sync package contains duplicate attachment bundles");
+          bundleIds.add(attachmentId);
+          const reference = referencesById.get(attachmentId);
+          if (!reference) throw new Error("Encrypted sync package contains an attachment without an encrypted reference");
+          attachmentRecords.push({
+            operationId: reference.id,
+            record: await syncCrypto.openEncryptedAttachmentBundle(bundle, metadata.syncProfile, device, reference.value)
+          });
+        }
+        if (bundleIds.size !== referencesById.size || [...referencesById.keys()].some(id => !bundleIds.has(id))) {
+          throw new Error("Encrypted sync package is missing attachment bytes");
+        }
+      }
+      const existing = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
+      const existingById = new Map(existing.map(operation => [operation.id, operation]));
+      const fresh = incoming.filter(operation => {
+        const known = existingById.get(operation.id);
+        if (known && syncCrypto.stableStringify(known) !== syncCrypto.stableStringify(operation)) {
+          throw new Error("Encrypted update changes an existing immutable operation");
+        }
+        return !known;
+      });
+      const freshIds = new Set(fresh.map(operation => operation.id));
+      const resolvedWinners = core.resolveSyncConflicts([...existing, ...fresh]);
+      const winners = resolvedWinners.filter(operation => freshIds.has(operation.id));
+      if (attachmentRecords.length) {
+        const winningAttachments = new Map(resolvedWinners
+          .filter(operation => operation.store === "attachments" && operation.action === "put")
+          .map(operation => [operation.entityId, operation.id]));
+        attachmentRecords = attachmentRecords
+          .filter(item => winningAttachments.get(item.record.id) === item.operationId)
+          .map(item => item.record);
+      }
+      const logicalClock = Math.max(Number(metadata.logicalClock) || 0, ...incoming.map(operation => operation.counter));
+      cursors[device.deviceId] = opened.header.sequence;
+      const transaction = db.transaction(TRANSACTION_STORES, "readwrite");
+      const stores = Object.fromEntries(TRANSACTION_STORES.map(name => [name, transaction.objectStore(name)]));
+      fresh.forEach(operation => stores.operations.add(operation));
+      winners.forEach(operation => materializeRemoteWinner(stores, operation));
+      attachmentRecords.forEach(record => stores.attachments.put(record));
+      stores.meta.put({ key: "logicalClock", value: logicalClock, updatedAt: new Date().toISOString() });
+      stores.meta.put({ key: "syncReplayCursors", value: cursors, updatedAt: new Date().toISOString() });
+      await transactionDone(transaction);
+      metadata.logicalClock = logicalClock;
+      metadata.syncReplayCursors = cursors;
+      const visibilityWinner = winners.find(operation => operation.store === "meta" && operation.entityId === "globalHiddenChatIds");
+      if (visibilityWinner) metadata.globalHiddenChatIds = visibilityWinner.action === "put" ? visibilityWinner.value.value : undefined;
+      return { received: incoming.length, stored: fresh.length, applied: winners.length, attachmentsStored: attachmentRecords.length, deviceId: device.deviceId, sequence: opened.header.sequence };
+    }
     const repository = {
       db,
       initialState,
@@ -548,40 +614,45 @@
           return envelope;
         });
       },
+      async createEncryptedPackage() {
+        return runSerialized(async () => {
+          const operations = (await repository.listOperations()).filter(operation => operation.deviceId === metadata.deviceIdentity.id);
+          if (!operations.length) throw new Error("This device has no operations to share");
+          const attachmentReferences = core.resolveSyncConflicts(operations)
+            .filter(operation => operation.store === "attachments" && operation.action === "put");
+          const attachments = await repository.getAllAttachments();
+          const attachmentsById = new Map(attachments.map(record => [record.id, record]));
+          const bundles = [];
+          for (const reference of attachmentReferences) {
+            const record = attachmentsById.get(reference.entityId);
+            if (!record?.blob) throw new Error(`Attachment ${reference.entityId} is unavailable on this device`);
+            if (Number(record.blob.size) !== Number(reference.value.size)) throw new Error(`Attachment ${reference.entityId} does not match its local sync reference`);
+            bundles.push(await syncCrypto.createEncryptedAttachmentBundle(record, metadata.deviceCredentials, metadata.syncProfile));
+          }
+          const sequence = (Number.isSafeInteger(metadata.outboundEnvelopeSequence) ? metadata.outboundEnvelopeSequence : 0) + 1;
+          const envelope = await syncCrypto.createOperationEnvelope(operations, metadata.deviceCredentials, metadata.syncProfile, { sequence });
+          const syncPackage = {
+            version: 1,
+            type: "selfchat-encrypted-sync-package",
+            createdAt: new Date().toISOString(),
+            envelope,
+            attachments: bundles
+          };
+          await persistSecurityMetadata({ outboundEnvelopeSequence: sequence });
+          return syncPackage;
+        });
+      },
       async applyRemoteEnvelope(envelope) {
         return runSerialized(async () => {
-          const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt);
-          if (!device) throw new Error("Encrypted update is not from an authorized device");
-          const cursors = { ...(metadata.syncReplayCursors || {}) };
-          const opened = await syncCrypto.openOperationEnvelope(envelope, metadata.syncProfile, device, {
-            minimumSequence: Number(cursors[device.deviceId]) || 0
-          });
-          const incoming = core.validateRemoteSyncOperations(opened.operations, device.deviceId);
-          const existing = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
-          const existingById = new Map(existing.map(operation => [operation.id, operation]));
-          const fresh = incoming.filter(operation => {
-            const known = existingById.get(operation.id);
-            if (known && syncCrypto.stableStringify(known) !== syncCrypto.stableStringify(operation)) {
-              throw new Error("Encrypted update changes an existing immutable operation");
-            }
-            return !known;
-          });
-          const freshIds = new Set(fresh.map(operation => operation.id));
-          const winners = core.resolveSyncConflicts([...existing, ...fresh]).filter(operation => freshIds.has(operation.id));
-          const logicalClock = Math.max(Number(metadata.logicalClock) || 0, ...incoming.map(operation => operation.counter));
-          cursors[device.deviceId] = opened.header.sequence;
-          const transaction = db.transaction(TRANSACTION_STORES, "readwrite");
-          const stores = Object.fromEntries(TRANSACTION_STORES.map(name => [name, transaction.objectStore(name)]));
-          fresh.forEach(operation => stores.operations.add(operation));
-          winners.forEach(operation => materializeRemoteWinner(stores, operation));
-          stores.meta.put({ key: "logicalClock", value: logicalClock, updatedAt: new Date().toISOString() });
-          stores.meta.put({ key: "syncReplayCursors", value: cursors, updatedAt: new Date().toISOString() });
-          await transactionDone(transaction);
-          metadata.logicalClock = logicalClock;
-          metadata.syncReplayCursors = cursors;
-          const visibilityWinner = winners.find(operation => operation.store === "meta" && operation.entityId === "globalHiddenChatIds");
-          if (visibilityWinner) metadata.globalHiddenChatIds = visibilityWinner.action === "put" ? visibilityWinner.value.value : undefined;
-          return { received: incoming.length, stored: fresh.length, applied: winners.length, deviceId: device.deviceId, sequence: opened.header.sequence };
+          const result = await applyRemotePayload(envelope);
+          const { attachmentsStored, ...legacyResult } = result;
+          return legacyResult;
+        });
+      },
+      async applyEncryptedPackage(syncPackage) {
+        return runSerialized(async () => {
+          if (syncPackage?.version !== 1 || syncPackage?.type !== "selfchat-encrypted-sync-package") throw new Error("Unsupported encrypted sync package");
+          return applyRemotePayload(syncPackage.envelope, syncPackage.attachments);
         });
       },
       async listSnapshots() { return requestResult(db.transaction("snapshots", "readonly").objectStore("snapshots").getAll()); },
