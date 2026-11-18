@@ -3194,8 +3194,9 @@ function renderSyncDeviceStatus() {
     elements.syncDeviceStatus.textContent = "Encrypted device pairing is unavailable in fallback storage mode.";
     return;
   }
-  const active = (repository.metadata.authorizedDevices || []).filter(device => !device.blockedAt).length;
-  elements.syncDeviceStatus.textContent = `${active} authorized device${active === 1 ? "" : "s"} · encrypted identity ready · automatic transport off`;
+  const active = (repository.metadata.authorizedDevices || []).filter(device => !device.blockedAt && !device.revokedAt).length;
+  const keyEpoch = Number.isSafeInteger(repository.metadata.syncProfile.keyEpoch) ? repository.metadata.syncProfile.keyEpoch : 1;
+  elements.syncDeviceStatus.textContent = `${active} authorized device${active === 1 ? "" : "s"} · key epoch ${keyEpoch} · automatic transport off`;
 }
 
 function renderAuthorizedDevices() {
@@ -3206,9 +3207,9 @@ function renderAuthorizedDevices() {
   const currentId = repository.metadata.deviceIdentity.id;
   elements.authorizedDeviceList.innerHTML = (repository.metadata.authorizedDevices || []).map(device => {
     const current = device.deviceId === currentId;
-    const status = current ? "This device" : device.blockedAt ? "Blocked locally" : "Authorized";
+    const status = current ? "This device" : device.revokedAt ? "Revoked" : device.blockedAt ? "Blocked locally" : "Authorized";
     const label = device.label || (current ? "This device" : "Paired device");
-    const action = !current && !device.blockedAt ? `<button type="button" data-block-device="${escapeHtml(device.deviceId)}">Block locally</button>` : "";
+    const action = !current && !device.revokedAt ? `<button type="button" data-revoke-device="${escapeHtml(device.deviceId)}">${device.blockedAt ? "Finish revocation" : "Revoke device"}</button>` : "";
     return `<div class="authorized-device-row"><span><strong>${escapeHtml(label)} · ${escapeHtml(status)}</strong><small>${escapeHtml(shortDeviceId(device.deviceId))}</small></span>${action}</div>`;
   }).join("");
 }
@@ -3357,6 +3358,11 @@ $("#processPairingInputButton").addEventListener("click", async () => {
       elements.pairingOutput.hidden = true;
       elements.pairingResult.textContent = `Paired successfully with profile ${shortDeviceId(result.profileId)}.`;
       renderAuthorizedDevices();
+    } else if (payload.manifest?.type === "selfchat-key-rotation") {
+      const result = await repository.acceptKeyRotationPackage(payload);
+      elements.pairingOutput.hidden = true;
+      elements.pairingResult.textContent = `Accepted key epoch ${result.keyEpoch}. ${result.revokedDeviceIds.length} device${result.revokedDeviceIds.length === 1 ? "" : "s"} revoked.`;
+      renderAuthorizedDevices();
     } else if (payload.type === "selfchat-encrypted-sync-package") {
       const result = await repository.applyEncryptedPackage(payload);
       await reloadRemoteState();
@@ -3375,19 +3381,20 @@ $("#processPairingInputButton").addEventListener("click", async () => {
   }
 });
 elements.authorizedDeviceList.addEventListener("click", async event => {
-  const button = event.target.closest("[data-block-device]");
+  const button = event.target.closest("[data-revoke-device]");
   if (!button) return;
   const approved = await requestConfirmation({
-    title: "Block this device locally?",
-    message: "Future encrypted updates from this device will be rejected here. This does not rotate the shared key yet, so the other device may still retain prior access.",
-    confirmLabel: "Block locally"
+    title: "Revoke this device?",
+    message: "SelfChat will rotate the shared profile key. Paste the generated rotation package on every remaining authorized device; the revoked device will not receive the replacement key.",
+    confirmLabel: "Revoke and rotate key"
   });
   if (!approved) return;
   try {
-    await repository.blockAuthorizedDevice(button.dataset.blockDevice);
+    const result = await repository.rotateProfileKeyAndRevokeDevice(button.dataset.revokeDevice);
+    showPairingOutput("Key rotation ready — paste it on every remaining device", result.rotationPackage);
     renderAuthorizedDevices();
     renderSyncDeviceStatus();
-    elements.pairingResult.textContent = "Device blocked locally.";
+    elements.pairingResult.textContent = `Device revoked at key epoch ${result.keyEpoch}. Remaining devices must accept this rotation package before exchanging new updates.`;
   } catch (error) {
     elements.pairingResult.textContent = error.message;
   }

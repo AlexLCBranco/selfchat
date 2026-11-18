@@ -438,6 +438,50 @@ test("authorized encrypted updates apply atomically and durable replay cursors r
   assert.equal((await repository.load()).chats.some(chat => chat.id === "blocked-chat"), false);
 });
 
+test("profile-key rotation durably revokes a device and can be accepted by a retained device", async () => {
+  const authorizer = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const retained = await syncCrypto.generateDeviceCredentials({ deviceId: "device-b", crypto: webcrypto });
+  const revoked = await syncCrypto.generateDeviceCredentials({ deviceId: "device-c", crypto: webcrypto });
+  const newcomer = await syncCrypto.generateDeviceCredentials({ deviceId: "device-d", crypto: webcrypto });
+  const originalProfile = { version: 1, id: "shared-profile", keyEpoch: 1, createdAt: "2026-11-18T12:00:00.000Z", algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const devices = [authorizer, retained, revoked, newcomer].map(credentials => ({
+    deviceId: credentials.deviceId,
+    label: credentials.deviceId,
+    signingPublicJwk: credentials.signing.publicJwk,
+    agreementPublicJwk: credentials.agreement.publicJwk,
+    authorizedAt: "2026-11-18T12:00:00.000Z",
+    authorizedBy: "device-a"
+  }));
+  repository = await storage.open(adapters({
+    createDeviceId: () => authorizer.deviceId,
+    createSyncSecurityFoundation: async () => ({ profile: structuredClone(originalProfile), credentials: authorizer })
+  }));
+  await repository.setMeta("authorizedDevices", devices);
+  const result = await repository.rotateProfileKeyAndRevokeDevice(revoked.deviceId);
+  assert.equal(result.keyEpoch, 2);
+  assert.equal(repository.metadata.authorizedDevices.find(device => device.deviceId === revoked.deviceId).revokedBy, authorizer.deviceId);
+  const oldEnvelope = await syncCrypto.createOperationEnvelope([{ id: "device-c:50", deviceId: "device-c", counter: 50, store: "messages", entityType: "message", entityId: "m50", action: "delete", recordedAt: new Date().toISOString() }], revoked, originalProfile, { sequence: 1, crypto: webcrypto });
+  await assert.rejects(repository.applyRemoteEnvelope(oldEnvelope), /not from an authorized device/);
+
+  repository.close();
+  repository = null;
+  await deleteDatabase(storage.DB_NAME);
+  repository = await storage.open(adapters({
+    createDeviceId: () => retained.deviceId,
+    createSyncSecurityFoundation: async () => ({ profile: structuredClone(originalProfile), credentials: retained })
+  }));
+  await repository.setMeta("authorizedDevices", devices
+    .filter(device => device.deviceId === authorizer.deviceId || device.deviceId === retained.deviceId)
+    .map(device => device.deviceId === authorizer.deviceId ? { ...device, agreementPublicJwk: undefined } : device));
+  const accepted = await repository.acceptKeyRotationPackage(result.rotationPackage);
+  assert.equal(accepted.keyEpoch, 2);
+  assert.notEqual(repository.metadata.syncProfile.keyMaterial, originalProfile.keyMaterial);
+  assert.equal(result.rotationPackage.grants.some(grant => grant.wrappedProfileKey === repository.metadata.syncProfile.keyMaterial), false);
+  assert.deepEqual(repository.metadata.authorizedDevices.find(device => device.deviceId === authorizer.deviceId).agreementPublicJwk, authorizer.agreement.publicJwk);
+  assert.equal(repository.metadata.authorizedDevices.some(device => device.deviceId === newcomer.deviceId && !device.revokedAt), true);
+  assert.equal(repository.metadata.authorizedDevices.find(device => device.deviceId === revoked.deviceId).revokedAt != null, true);
+});
+
 test("encrypted sync packages transfer attachment bytes atomically with their message operations", async () => {
   repository = await storage.open(adapters({
     createDeviceId: () => "local-device",
@@ -492,7 +536,7 @@ test("a damaged attachment package commits no operations, message, blob, or repl
     { id: "remote-device:201", deviceId: "remote-device", counter: 201, store: "messages", entityType: "message", entityId: "damaged-message", action: "put", recordedAt, value: { id: "damaged-message", chatId: "topic", type: "file", fileId: attachment.id, createdAt: recordedAt } }
   ];
   const bundle = await syncCrypto.createEncryptedAttachmentBundle(attachment, remote, repository.metadata.syncProfile, { chunkSize: 1024, crypto: webcrypto });
-  bundle.chunks[0].ciphertext = `${bundle.chunks[0].ciphertext.slice(0, -1)}A`;
+  bundle.chunks[0].ciphertext = `${bundle.chunks[0].ciphertext[0] === "A" ? "B" : "A"}${bundle.chunks[0].ciphertext.slice(1)}`;
   const syncPackage = { version: 1, type: "selfchat-encrypted-sync-package", envelope: await syncCrypto.createOperationEnvelope(operations, remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto }), attachments: [bundle] };
   const beforeOperations = (await repository.listOperations()).length;
 

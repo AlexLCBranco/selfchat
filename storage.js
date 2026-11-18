@@ -265,6 +265,7 @@
             id: createSyncProfileId(adapters),
             createdAt,
             algorithm: "AES-GCM-256",
+            keyEpoch: 1,
             keyMaterial: syncCrypto.generateProfileKey()
           },
           credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt })
@@ -389,7 +390,7 @@
       else store.put(operation.value);
     }
     async function applyRemotePayload(envelope, attachmentBundles = null) {
-      const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt);
+      const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt && !item.revokedAt);
       if (!device) throw new Error("Encrypted update is not from an authorized device");
       const cursors = { ...(metadata.syncReplayCursors || {}) };
       const opened = await syncCrypto.openOperationEnvelope(envelope, metadata.syncProfile, device, {
@@ -582,10 +583,11 @@
           deviceId: trustedAuthorizer.deviceId,
           label: pending.invitation.deviceLabel || "Authorizing device",
           signingPublicJwk: trustedAuthorizer.signingPublicJwk,
+          agreementPublicJwk: pending.invitation.authorizerAgreementPublicJwk,
           authorizedAt: pending.invitation.createdAt,
           authorizedBy: trustedAuthorizer.deviceId
         };
-        const syncProfile = { version: 1, id: grant.profileId, createdAt: pending.invitation.createdAt, algorithm: "AES-GCM-256", keyMaterial };
+        const syncProfile = { version: 1, id: grant.profileId, createdAt: pending.invitation.createdAt, algorithm: "AES-GCM-256", keyEpoch: Number.isSafeInteger(grant.keyEpoch) ? grant.keyEpoch : 1, keyMaterial };
         await persistSecurityMetadata({
           syncProfile,
           authorizedDevices: [authorizer, selfDevice],
@@ -603,6 +605,79 @@
         if (!authorizedDevices.some(device => device.deviceId === deviceId)) throw new Error("Authorized device was not found");
         await persistSecurityMetadata({ authorizedDevices });
         return authorizedDevices;
+      },
+      async rotateProfileKeyAndRevokeDevice(deviceId) {
+        return runSerialized(async () => {
+          if (deviceId === metadata.deviceIdentity.id) throw new Error("This device cannot revoke itself");
+          const revokedAt = new Date().toISOString();
+          const { rotationPackage, newKeyMaterial } = await syncCrypto.createKeyRotationPackage(
+            metadata.deviceCredentials,
+            metadata.syncProfile,
+            metadata.authorizedDevices,
+            deviceId,
+            { createdAt: revokedAt }
+          );
+          const revokedIds = new Set(rotationPackage.manifest.revokedDeviceIds);
+          const authorizedDevices = (metadata.authorizedDevices || []).map(device => revokedIds.has(device.deviceId)
+            ? { ...device, revokedAt: device.revokedAt || revokedAt, revokedBy: device.revokedBy || metadata.deviceIdentity.id, blockedAt: device.blockedAt || revokedAt }
+            : device);
+          const syncProfile = {
+            ...metadata.syncProfile,
+            keyEpoch: rotationPackage.manifest.keyEpoch,
+            keyMaterial: newKeyMaterial,
+            rotatedAt: revokedAt,
+            rotatedBy: metadata.deviceIdentity.id
+          };
+          await persistSecurityMetadata({ syncProfile, authorizedDevices });
+          return { rotationPackage, keyEpoch: syncProfile.keyEpoch, revokedDeviceIds: [...revokedIds] };
+        });
+      },
+      async acceptKeyRotationPackage(rotationPackage) {
+        return runSerialized(async () => {
+          const authorizer = (metadata.authorizedDevices || []).find(device => device.deviceId === rotationPackage?.manifest?.authorizerDeviceId && !device.blockedAt && !device.revokedAt);
+          if (!authorizer) throw new Error("Key rotation is not from an authorized device");
+          const currentById = new Map((metadata.authorizedDevices || []).map(device => [device.deviceId, device]));
+          const retained = rotationPackage?.manifest?.authorizedDevices;
+          const revokedIds = rotationPackage?.manifest?.revokedDeviceIds;
+          if (!Array.isArray(retained) || !Array.isArray(revokedIds)) throw new Error("Key rotation device registry is invalid");
+          for (const device of retained) {
+            const current = currentById.get(device.deviceId);
+            if (current?.blockedAt || current?.revokedAt) throw new Error("Key rotation attempts to authorize an unavailable device");
+            if (current && (syncCrypto.stableStringify(current.signingPublicJwk) !== syncCrypto.stableStringify(device.signingPublicJwk)
+              || (current.agreementPublicJwk && syncCrypto.stableStringify(current.agreementPublicJwk) !== syncCrypto.stableStringify(device.agreementPublicJwk)))) {
+              throw new Error("Key rotation changes an authorized device identity");
+            }
+          }
+          const coveredIds = new Set([...retained.map(device => device.deviceId), ...revokedIds]);
+          if ([...currentById.values()].some(device => !device.revokedAt && !coveredIds.has(device.deviceId))) throw new Error("Key rotation omits an authorized device");
+          const accepted = await syncCrypto.acceptKeyRotationPackage(
+            rotationPackage,
+            metadata.deviceCredentials,
+            metadata.syncProfile,
+            authorizer
+          );
+          const changedAt = rotationPackage.manifest.createdAt || new Date().toISOString();
+          const previousById = new Map((metadata.authorizedDevices || []).map(device => [device.deviceId, device]));
+          const authorizedDevices = accepted.authorizedDevices.map(device => ({ ...device }));
+          accepted.revokedDeviceIds.forEach(deviceId => {
+            const previous = previousById.get(deviceId) || { deviceId, label: "Revoked device" };
+            authorizedDevices.push({
+              ...previous,
+              blockedAt: previous.blockedAt || changedAt,
+              revokedAt: previous.revokedAt || changedAt,
+              revokedBy: previous.revokedBy || authorizer.deviceId
+            });
+          });
+          const syncProfile = {
+            ...metadata.syncProfile,
+            keyEpoch: accepted.keyEpoch,
+            keyMaterial: accepted.keyMaterial,
+            rotatedAt: changedAt,
+            rotatedBy: authorizer.deviceId
+          };
+          await persistSecurityMetadata({ syncProfile, authorizedDevices });
+          return { keyEpoch: accepted.keyEpoch, revokedDeviceIds: accepted.revokedDeviceIds, authorizerDeviceId: authorizer.deviceId };
+        });
       },
       async createEncryptedUpdate() {
         return runSerialized(async () => {

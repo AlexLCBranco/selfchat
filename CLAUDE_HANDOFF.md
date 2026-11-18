@@ -4,20 +4,31 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source and production version is **v2.8.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1`).
-- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import.
-- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, key rotation, permanent-erasure tombstone propagation, or compaction.
+- The current visible source version is **v2.9.0**. Production remains **v2.8.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1`) until the verified v2.9.0 build is committed, pushed, and deployed.
+- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import; v2.9.0 adds signed profile-key rotation and durable device revocation.
+- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, permanent-erasure tombstone propagation, operation compaction, or offline/reconnect integration coverage.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
 - `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
 
 ## Delivery state
 
-- **Implemented:** v2.8.0 SC-20 encrypted attachment-package foundation exists in the current working tree.
-- **Tested:** yes. All required syntax checks, 83 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** yes. Implementation commit `2201948` contains the v2.8.0 source, tests, decisions, backlog, and initial handoff report.
-- **Pushed:** yes. `origin/main` was verified at full commit `2201948a517c98ecdceded5039b3b49ab279390b` after the implementation push; the final deployment-report commit is synchronized separately.
-- **Deployed:** yes. Deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1` is READY and aliased to `https://selfchat-home.vercel.app`.
-- **Production verified:** yes. An authenticated Vercel fetch returned v2.8.0 and the package controls. A browser load/reload at the stable URL preserved the hosted-origin message, displayed the download/import controls with automatic transport off, and produced no warnings or errors.
+- **Implemented:** v2.9.0 SC-20 profile-key rotation and durable-revocation foundation exists in the current working tree.
+- **Tested:** yes. All required syntax checks, 85 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
+- **Committed:** pending.
+- **Pushed:** pending.
+- **Deployed:** pending; production still serves v2.8.0.
+- **Production verified:** pending for v2.9.0.
+
+## SC-20 profile-key rotation and durable revocation — 2026-11-18
+
+- **Forward revocation:** revoking a device advances a monotonic profile-key epoch and generates a new random AES-256 key. The signed rotation package wraps that key separately for each retained authorized device with ephemeral ECDH, HKDF-SHA-256, and AES-GCM; revoked and previously blocked devices receive no grant.
+- **Authenticated registry:** receivers require a currently authorized unblocked signer, a consecutive epoch, coverage of every known active device, unchanged known signing and agreement identities, and a grant targeting the current device. A trusted signer may introduce newly enrolled devices that a peer has not yet seen; omitted known devices, identity substitution, stale or skipped epochs, and revoked recipients are rejected. Legacy peers that lack an authorizer agreement key learn it only from that authorizer's signed rotation package.
+- **Epoch enforcement:** operation envelopes and attachment bundles authenticate the active key epoch, so packages made with an older key are rejected before decryption. Enrollment grants carry the current epoch so devices paired after a rotation join the correct generation.
+- **Durability and UI:** the new key, epoch, rotation provenance, and revocation metadata persist without a database migration or content rewrite. Data settings shows the active epoch, replaces local-only blocking with `Revoke device`, and produces an explicit copy/paste rotation package for every remaining device. Automatic transport remains off.
+- **Adjacent reliability fix:** the service worker now clones cacheable responses before returning them to the page, preventing the previous `Response body is already used` console failures during deferred cache writes.
+- **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 85 automated tests and `git diff --check` passed. The local browser loaded v2.9.0 over the existing profile, retained 2 messages and their attachments through repeated reloads, displayed `key epoch 1` and the revised rotation guidance, closed the pairing panel through Escape, activated the fixed service worker, and produced no application errors. Chrome emitted only its expected custom-install-prompt banner diagnostic.
+- **Remaining risks:** rotation packages still require manual distribution; a retained device that misses one epoch cannot skip directly to a later package; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
+- **Next recommended step:** implement signed content-free permanent-erasure markers with idempotent cross-device application, then bounded operation compaction and offline/reconnect integration tests before selecting a backend.
 
 ## SC-20 encrypted attachment packages — 2026-11-18
 
@@ -92,13 +103,13 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Architecture and privacy boundary
 
-- `selfchat-unified-v1` remains the only active data source. Source v2.8.0 retains IndexedDB schema version 2 and adds no migration or destructive rewrite.
+- `selfchat-unified-v1` remains the only active data source. Source v2.9.0 retains IndexedDB schema version 2 and adds no migration or destructive rewrite.
 - Device ID, profile key, and private device credentials remain browser-local metadata, not an account. Lamport order is deterministic but does not claim wall-clock chronology.
 - Operation payloads remain local plaintext inside the existing browser privacy boundary and can be transformed into signed encrypted envelopes for future transport. Attachment operations contain references and metadata, while blob bytes stay in `attachments`.
 - The installed app uses the same browser profile and origin data. It does not copy, upload, or synchronize message content.
 - `service-worker-core.js` owns the small testable cache-policy decisions. `service-worker.js` owns browser service-worker lifecycle and fetching.
 - Failed responses and cross-origin responses are not added to the offline cache. Navigation failures fall back to the cached app shell.
-- Before network synchronization, add key recovery/rotation, backend retention and access boundaries, attachment transfer/integrity, compaction, cross-device permanent-erasure semantics, and offline/reconnect integration coverage.
+- Before network synchronization, add backend retention and access boundaries, compaction, cross-device permanent-erasure semantics, and offline/reconnect integration coverage. Attachment integrity and profile-key rotation are now implemented for explicit manual packages.
 
 ## Verification baseline
 
@@ -134,4 +145,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.8.0 encrypted attachment-package implementation, verification, commit/push, deployment, and production verification are complete.
-- Continue SC-20 with key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
+- v2.9.0 key-rotation/revocation implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- Continue SC-20 with permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.

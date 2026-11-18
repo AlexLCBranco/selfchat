@@ -74,7 +74,7 @@ test("operation envelopes encrypt content, authenticate headers, and reject repl
     /stale or replayed/
   );
   await assert.rejects(
-    syncCrypto.openOperationEnvelope({ ...envelope, ciphertext: `${envelope.ciphertext.slice(0, -1)}A` }, profile, authorizedDevice, { crypto: webcrypto }),
+    syncCrypto.openOperationEnvelope({ ...envelope, ciphertext: `${envelope.ciphertext[0] === "A" ? "B" : "A"}${envelope.ciphertext.slice(1)}` }, profile, authorizedDevice, { crypto: webcrypto }),
     /signature is invalid/
   );
 });
@@ -91,6 +91,37 @@ test("pairing invitations are signed, short-lived, and have a stable comparison 
   assert.equal(await syncCrypto.verifyPairingInvitation(invitation, { now: Date.parse("2026-11-18T12:11:00.000Z"), crypto: webcrypto }), false);
   assert.equal(await syncCrypto.verifyPairingInvitation({ ...invitation, profileId: "attacker" }, { now: Date.parse("2026-11-18T12:05:00.000Z"), crypto: webcrypto }), false);
   assert.match(await syncCrypto.pairingVerificationCode(invitation, webcrypto), /^[A-Z0-9_-]{4}-[A-Z0-9_-]{4}-[A-Z0-9_-]{4}$/);
+});
+
+test("key rotation wraps a new epoch only for retained devices and rejects revoked or stale recipients", async () => {
+  const authorizer = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const retained = await syncCrypto.generateDeviceCredentials({ deviceId: "device-b", crypto: webcrypto });
+  const revoked = await syncCrypto.generateDeviceCredentials({ deviceId: "device-c", crypto: webcrypto });
+  const profile = { id: "profile-1", keyEpoch: 1, keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const devices = [authorizer, retained, revoked].map(credentials => ({
+    deviceId: credentials.deviceId,
+    signingPublicJwk: credentials.signing.publicJwk,
+    agreementPublicJwk: credentials.agreement.publicJwk,
+    authorizedAt: "2026-11-18T12:00:00.000Z",
+    authorizedBy: "device-a"
+  }));
+  const { rotationPackage, newKeyMaterial } = await syncCrypto.createKeyRotationPackage(authorizer, profile, devices, revoked.deviceId, {
+    createdAt: "2026-11-18T13:00:00.000Z",
+    crypto: webcrypto
+  });
+
+  assert.deepEqual(rotationPackage.manifest.revokedDeviceIds, ["device-c"]);
+  assert.deepEqual(rotationPackage.grants.map(grant => grant.deviceId), ["device-a", "device-b"]);
+  assert.equal(JSON.stringify(rotationPackage).includes(newKeyMaterial), false);
+  const accepted = await syncCrypto.acceptKeyRotationPackage(rotationPackage, retained, profile, devices[0], { crypto: webcrypto });
+  assert.equal(accepted.keyEpoch, 2);
+  assert.equal(accepted.keyMaterial, newKeyMaterial);
+  await assert.rejects(syncCrypto.acceptKeyRotationPackage(rotationPackage, revoked, profile, devices[0], { crypto: webcrypto }), /revoked/);
+  await assert.rejects(syncCrypto.acceptKeyRotationPackage(rotationPackage, retained, { ...profile, keyEpoch: 2 }, devices[0], { crypto: webcrypto }), /stale or skips/);
+
+  const rotatedProfile = { ...profile, keyEpoch: 2, keyMaterial: newKeyMaterial };
+  const envelope = await syncCrypto.createOperationEnvelope([{ id: "device-a:1", deviceId: "device-a", counter: 1, store: "messages", entityId: "m1", action: "delete" }], authorizer, rotatedProfile, { sequence: 1, crypto: webcrypto });
+  await assert.rejects(syncCrypto.openOperationEnvelope(envelope, profile, devices[0], { crypto: webcrypto }), /another profile-key epoch/);
 });
 
 test("attachment bundles encrypt multiple chunks and restore bytes only after integrity verification", async () => {
@@ -128,7 +159,7 @@ test("attachment bundles reject tampering, missing or reordered chunks, wrong pr
   await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: bundle.chunks.slice(1) }, profile, authorized, expected, { crypto: webcrypto }), /missing encrypted chunks/);
   await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: [bundle.chunks[1], bundle.chunks[0], ...bundle.chunks.slice(2)] }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
   await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, chunks: [bundle.chunks[0], bundle.chunks[0], ...bundle.chunks.slice(2)] }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
-  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, integrity: { ...bundle.integrity, ciphertext: `${bundle.integrity.ciphertext.slice(0, -1)}A` } }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
+  await assert.rejects(syncCrypto.openEncryptedAttachmentBundle({ ...bundle, integrity: { ...bundle.integrity, ciphertext: `${bundle.integrity.ciphertext[0] === "A" ? "B" : "A"}${bundle.integrity.ciphertext.slice(1)}` } }, profile, authorized, expected, { crypto: webcrypto }), /signature is invalid/);
   await assert.rejects(syncCrypto.openEncryptedAttachmentBundle(bundle, { ...profile, id: "other-profile" }, authorized, expected, { crypto: webcrypto }), /another sync profile/);
   await assert.rejects(syncCrypto.openEncryptedAttachmentBundle(bundle, profile, { deviceId: credentials.deviceId, signingPublicJwk: impostor.signing.publicJwk }, expected, { crypto: webcrypto }), /signature is invalid/);
 });

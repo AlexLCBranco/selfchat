@@ -7,6 +7,7 @@
 
   const ENVELOPE_VERSION = 1;
   const ATTACHMENT_BUNDLE_VERSION = 1;
+  const KEY_ROTATION_VERSION = 1;
   const DEFAULT_ATTACHMENT_CHUNK_SIZE = 256 * 1024;
   const MAX_ATTACHMENT_CHUNKS = 10000;
   const encoder = new TextEncoder();
@@ -153,6 +154,7 @@
       profileId: profile.id,
       authorizerDeviceId: credentials.deviceId,
       authorizerSigningPublicJwk: credentials.signing.publicJwk,
+      authorizerAgreementPublicJwk: credentials.agreement.publicJwk,
       nonce,
       createdAt,
       expiresAt,
@@ -203,6 +205,7 @@
       version: 1,
       type: "selfchat-enrollment-grant",
       profileId: request.profileId,
+      keyEpoch: Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1,
       requesterDeviceId: request.deviceId,
       authorizerDeviceId: authorizerCredentials.deviceId,
       requestHash,
@@ -237,6 +240,96 @@
     return base64UrlEncode(raw);
   }
 
+  async function createKeyRotationPackage(credentials, profile, authorizedDevices, revokedDeviceId, {
+    createdAt = new Date().toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    if (!profile?.id || !profile?.keyMaterial) throw new Error("A sync profile is required");
+    if (!revokedDeviceId || revokedDeviceId === credentials.deviceId) throw new Error("The current device cannot revoke itself");
+    const devices = Array.isArray(authorizedDevices) ? authorizedDevices : [];
+    const target = devices.find(device => device.deviceId === revokedDeviceId && !device.revokedAt);
+    if (!target) throw new Error("The device is not currently authorized");
+    const keyEpoch = (Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1) + 1;
+    const retainedDevices = devices
+      .filter(device => device.deviceId !== revokedDeviceId && !device.revokedAt && !device.blockedAt)
+      .map(device => ({
+        deviceId: device.deviceId,
+        label: device.label || "Paired device",
+        signingPublicJwk: device.signingPublicJwk,
+        agreementPublicJwk: device.agreementPublicJwk,
+        authorizedAt: device.authorizedAt,
+        authorizedBy: device.authorizedBy
+      }));
+    if (!retainedDevices.some(device => device.deviceId === credentials.deviceId)) throw new Error("The rotating device is not authorized");
+    if (retainedDevices.some(device => !device.agreementPublicJwk)) throw new Error("Every retained device needs a key-agreement identity before rotation");
+    const newKeyMaterial = generateProfileKey(api);
+    const manifest = {
+      version: KEY_ROTATION_VERSION,
+      type: "selfchat-key-rotation",
+      profileId: profile.id,
+      previousKeyEpoch: keyEpoch - 1,
+      keyEpoch,
+      authorizerDeviceId: credentials.deviceId,
+      revokedDeviceIds: devices.filter(device => device.deviceId === revokedDeviceId || device.revokedAt || device.blockedAt).map(device => device.deviceId),
+      authorizedDevices: retainedDevices,
+      createdAt
+    };
+    const grants = [];
+    for (const device of retainedDevices) {
+      const ephemeral = await api.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+      const ephemeralPrivate = await api.subtle.exportKey("jwk", ephemeral.privateKey);
+      const ephemeralPublic = await api.subtle.exportKey("jwk", ephemeral.publicKey);
+      const salt = randomBytes(16, api);
+      const iv = randomBytes(12, api);
+      const info = `selfchat-key-rotation:${profile.id}:${keyEpoch}:${device.deviceId}`;
+      const wrappingKey = await deriveEnrollmentKey(ephemeralPrivate, device.agreementPublicJwk, salt, info, api);
+      const aad = stableStringify({ manifest, deviceId: device.deviceId });
+      const wrappedProfileKey = await api.subtle.encrypt({ name: "AES-GCM", iv, additionalData: bytes(aad) }, wrappingKey, base64UrlDecode(newKeyMaterial));
+      grants.push({
+        deviceId: device.deviceId,
+        ephemeralAgreementPublicJwk: ephemeralPublic,
+        salt: base64UrlEncode(salt),
+        iv: base64UrlEncode(iv),
+        wrappedProfileKey: base64UrlEncode(wrappedProfileKey)
+      });
+    }
+    const signed = { manifest, grants };
+    return {
+      rotationPackage: { ...signed, signature: await sign(signed, credentials.signing.privateJwk, api) },
+      newKeyMaterial
+    };
+  }
+
+  async function acceptKeyRotationPackage(rotationPackage, credentials, profile, trustedAuthorizer, {
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    const { signature, ...signed } = rotationPackage || {};
+    const manifest = signed.manifest || {};
+    const currentEpoch = Number.isSafeInteger(profile?.keyEpoch) ? profile.keyEpoch : 1;
+    if (manifest.version !== KEY_ROTATION_VERSION || manifest.type !== "selfchat-key-rotation") throw new Error("Unsupported key rotation package");
+    if (manifest.profileId !== profile?.id) throw new Error("Key rotation belongs to another sync profile");
+    if (manifest.authorizerDeviceId !== trustedAuthorizer?.deviceId) throw new Error("Key rotation authorizer is not trusted");
+    if (!(await verify(signed, signature, trustedAuthorizer.signingPublicJwk, api))) throw new Error("Key rotation signature is invalid");
+    if (manifest.previousKeyEpoch !== currentEpoch || manifest.keyEpoch !== currentEpoch + 1) throw new Error("Key rotation is stale or skips a key epoch");
+    if (!Array.isArray(manifest.revokedDeviceIds) || !manifest.revokedDeviceIds.length || new Set(manifest.revokedDeviceIds).size !== manifest.revokedDeviceIds.length) throw new Error("Key rotation revocation list is invalid");
+    if (!Array.isArray(manifest.authorizedDevices) || manifest.authorizedDevices.some(device => !device?.deviceId || manifest.revokedDeviceIds.includes(device.deviceId))) throw new Error("Key rotation device registry is invalid");
+    const retainedIds = new Set(manifest.authorizedDevices.map(device => device.deviceId));
+    if (retainedIds.size !== manifest.authorizedDevices.length || !retainedIds.has(manifest.authorizerDeviceId)) throw new Error("Key rotation device registry is invalid");
+    if (!Array.isArray(signed.grants)) throw new Error("Key rotation grants do not match the device registry");
+    const selfDevice = manifest.authorizedDevices.find(device => device.deviceId === credentials.deviceId);
+    const grant = signed.grants.find(item => item.deviceId === credentials.deviceId);
+    if (!selfDevice || !grant || manifest.revokedDeviceIds.includes(credentials.deviceId)) throw new Error("This device was revoked by the key rotation");
+    if (stableStringify(selfDevice.signingPublicJwk) !== stableStringify(credentials.signing.publicJwk) || stableStringify(selfDevice.agreementPublicJwk) !== stableStringify(credentials.agreement.publicJwk)) throw new Error("Key rotation changes this device identity");
+    if (signed.grants.length !== manifest.authorizedDevices.length || new Set(signed.grants.map(item => item.deviceId)).size !== signed.grants.length || signed.grants.some(item => !retainedIds.has(item.deviceId))) throw new Error("Key rotation grants do not match the device registry");
+    const info = `selfchat-key-rotation:${profile.id}:${manifest.keyEpoch}:${credentials.deviceId}`;
+    const wrappingKey = await deriveEnrollmentKey(credentials.agreement.privateJwk, grant.ephemeralAgreementPublicJwk, base64UrlDecode(grant.salt), info, api);
+    const aad = stableStringify({ manifest, deviceId: credentials.deviceId });
+    const raw = await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(grant.iv), additionalData: bytes(aad) }, wrappingKey, base64UrlDecode(grant.wrappedProfileKey));
+    return { keyMaterial: base64UrlEncode(raw), keyEpoch: manifest.keyEpoch, authorizedDevices: manifest.authorizedDevices, revokedDeviceIds: manifest.revokedDeviceIds };
+  }
+
   async function importProfileKey(profileKey, usage, cryptoOverride) {
     return cryptoApi(cryptoOverride).subtle.importKey("raw", base64UrlDecode(profileKey), { name: "AES-GCM" }, false, [usage]);
   }
@@ -268,6 +361,7 @@
       version: ATTACHMENT_BUNDLE_VERSION,
       type: "selfchat-attachment-bundle",
       profileId: profile.id,
+      keyEpoch: Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1,
       deviceId: credentials.deviceId,
       attachmentId: record.id,
       size: content.byteLength,
@@ -303,6 +397,7 @@
     const manifest = signed.manifest || {};
     if (manifest.version !== ATTACHMENT_BUNDLE_VERSION || manifest.type !== "selfchat-attachment-bundle") throw new Error("Unsupported attachment bundle");
     if (manifest.profileId !== profile.id) throw new Error("Attachment bundle belongs to another sync profile");
+    if (manifest.keyEpoch !== (Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1)) throw new Error("Attachment bundle uses another profile-key epoch");
     if (manifest.deviceId !== authorizedDevice?.deviceId) throw new Error("Attachment bundle signer is not authorized for the claimed device");
     if (!manifest.attachmentId || manifest.attachmentId !== expected.id) throw new Error("Attachment bundle does not match its encrypted reference");
     if (!Number.isSafeInteger(manifest.size) || manifest.size < 0 || manifest.size !== Number(expected.size)) throw new Error("Attachment bundle size does not match its encrypted reference");
@@ -351,6 +446,7 @@
       version: ENVELOPE_VERSION,
       type: "selfchat-operation-envelope",
       profileId: profile.id,
+      keyEpoch: Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1,
       deviceId: credentials.deviceId,
       sequence,
       createdAt,
@@ -372,6 +468,7 @@
     const header = signed.header || {};
     if (header.version !== ENVELOPE_VERSION || header.type !== "selfchat-operation-envelope") throw new Error("Unsupported operation envelope");
     if (header.profileId !== profile.id) throw new Error("Operation envelope belongs to another sync profile");
+    if (header.keyEpoch !== (Number.isSafeInteger(profile.keyEpoch) ? profile.keyEpoch : 1)) throw new Error("Operation envelope uses another profile-key epoch");
     if (header.deviceId !== authorizedDevice?.deviceId) throw new Error("Operation envelope signer is not authorized for the claimed device");
     if (!Number.isSafeInteger(header.sequence) || header.sequence <= minimumSequence) throw new Error("Operation envelope is stale or replayed");
     if (!(await verify(signed, signature, authorizedDevice.signingPublicJwk, api))) throw new Error("Operation envelope signature is invalid");
@@ -387,6 +484,7 @@
   return {
     ENVELOPE_VERSION,
     ATTACHMENT_BUNDLE_VERSION,
+    KEY_ROTATION_VERSION,
     DEFAULT_ATTACHMENT_CHUNK_SIZE,
     stableStringify,
     base64UrlEncode,
@@ -400,6 +498,8 @@
     pairingVerificationCode,
     issueEnrollmentGrant,
     acceptEnrollmentGrant,
+    createKeyRotationPackage,
+    acceptKeyRotationPackage,
     createEncryptedAttachmentBundle,
     openEncryptedAttachmentBundle,
     createOperationEnvelope,

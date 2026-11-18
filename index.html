@@ -42,7 +42,7 @@
       </div>
       <div class="sidebar-foot">
         <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v2.8.0</span>
+        <span class="app-version" title="SelfChat version">v2.9.0</span>
       </div>
     </aside>
 
@@ -368,14 +368,14 @@
         <textarea id="pairingOutputText" rows="6" readonly aria-label="Generated pairing data"></textarea>
         <button class="button primary" id="copyPairingOutputButton" type="button">Copy generated text</button>
       </div>
-      <label for="pairingInputText">Paste invitation, request, grant, or text-only encrypted update</label>
-      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing or text-only encrypted update here"></textarea>
+      <label for="pairingInputText">Paste invitation, request, grant, key rotation, or text-only encrypted update</label>
+      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing, key rotation, or text-only encrypted update here"></textarea>
       <button class="button primary full" id="processPairingInputButton" type="button">Process pasted text</button>
       <p class="pairing-result" id="pairingResult" aria-live="polite"></p>
       <div class="paired-device-section">
         <div class="dialog-label">AUTHORIZED DEVICES</div>
         <div id="authorizedDeviceList" class="authorized-device-list"></div>
-        <p class="dialog-warning">Blocking is local until key rotation is implemented. A previously paired device may still hold the shared key.</p>
+        <p class="dialog-warning">Revocation rotates the profile key. Paste its generated package on every remaining authorized device before exchanging new updates.</p>
       </div>
       <button class="button secondary full" id="closePairingButton" type="button">Done</button>
     </div>
@@ -508,10 +508,10 @@
   </div>
   <div class="toast" id="toast" role="status"></div>
   <script src="storage-core.js?v=9"></script>
-  <script src="sync-crypto.js?v=3"></script>
+  <script src="sync-crypto.js?v=4"></script>
   <script src="sync-backend.js?v=1"></script>
-  <script src="storage.js?v=10"></script>
+  <script src="storage.js?v=11"></script>
   <script src="app-core.js?v=14"></script>
-  <script src="app.js?v=48"></script>
+  <script src="app.js?v=49"></script>
 </body>
 </html>

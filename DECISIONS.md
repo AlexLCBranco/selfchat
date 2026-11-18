@@ -316,3 +316,11 @@ Attachment transfer is first exposed as an explicit local file package rather th
 Import accepts only the authorized unblocked device and matching sync profile, requires exactly one bundle for every current attachment put reference, verifies chunk count, order, length, AEAD authentication, signature, reference size, and reconstructed SHA-256 digest, and performs no IndexedDB mutation until all bundles pass. Winning blobs then commit atomically with operations, materialized records, logical clock, and replay cursor. Version 2.8.0 adds no endpoint, account, background transfer, or automatic transport.
 
 Reason: attachment integrity and transactional no-partial-commit behavior must be proven independently of backend selection, while an explicit direct-transfer package lets paired-device behavior be exercised without expanding the hosted application's transmission boundary.
+
+## 2026-11-18 — SC-20 profile-key rotation and durable revocation
+
+Device revocation advances the existing sync profile to a strictly monotonic key epoch and generates a signed rotation package. The new random AES-256 profile key is wrapped independently through ephemeral ECDH, HKDF-SHA-256, and AES-GCM for each retained authorized device. Revoked and previously blocked devices receive no wrapped grant. Rotation packages preserve the existing profile ID and trusted device identities, reject unknown, omitted, substituted, revoked, stale, or skipped-epoch device state, and can be accepted only when signed by a currently authorized unblocked device.
+
+Operation envelopes and attachment bundles authenticate the profile-key epoch and are rejected when they use an older or different epoch. Enrollment grants carry the current epoch so a newly paired device joins the active key generation. Rotation metadata and durable revocation state persist locally without rewriting chats, messages, attachments, Trash, snapshots, or operation history. Distribution remains an explicit copy/paste action; automatic transport and backend infrastructure remain disabled.
+
+Reason: local blocking did not remove a device's knowledge of the shared key. Per-device wrapping of a replacement key creates actual forward revocation while retaining the existing direct-transfer privacy boundary and non-destructive local storage model.
