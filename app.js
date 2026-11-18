@@ -80,6 +80,10 @@ const elements = {
   avatarEmojiPicker: $("#avatarEmojiPicker"), avatarEditorPreview: $("#avatarEditorPreview"), avatarImageInput: $("#avatarImageInput"),
   removeAvatarImageButton: $("#removeAvatarImageButton"),
   settingsDialog: $("#settingsDialog"), contextMenu: $("#messageContextMenu"), chatContextMenu: $("#chatContextMenu"), toast: $("#toast"), importInput: $("#importInput"),
+  pairingDialog: $("#pairingDialog"), pairingDeviceLabel: $("#pairingDeviceLabel"), pairingInputText: $("#pairingInputText"),
+  pairingOutput: $("#pairingOutput"), pairingOutputTitle: $("#pairingOutputTitle"), pairingOutputText: $("#pairingOutputText"),
+  pairingVerificationCode: $("#pairingVerificationCode"), pairingResult: $("#pairingResult"), authorizedDeviceList: $("#authorizedDeviceList"),
+  syncDeviceStatus: $("#syncDeviceStatus"),
   recoveryList: $("#recoveryList"), recoveryStatus: $("#recoveryStatus"),
   storageDiagnostics: $("#storageDiagnostics"), recoveryPreviewDialog: $("#recoveryPreviewDialog"), recoveryPreviewSummary: $("#recoveryPreviewSummary"),
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
@@ -3181,6 +3185,56 @@ async function renderStorageDiagnostics() {
   elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${syncStatus} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
 }
 
+function shortDeviceId(value = "") {
+  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
+}
+
+function renderSyncDeviceStatus() {
+  if (!repository?.metadata.syncProfile) {
+    elements.syncDeviceStatus.textContent = "Encrypted device pairing is unavailable in fallback storage mode.";
+    return;
+  }
+  const active = (repository.metadata.authorizedDevices || []).filter(device => !device.blockedAt).length;
+  elements.syncDeviceStatus.textContent = `${active} authorized device${active === 1 ? "" : "s"} · encrypted identity ready · automatic transport off`;
+}
+
+function renderAuthorizedDevices() {
+  if (!repository) {
+    elements.authorizedDeviceList.innerHTML = '<p class="dialog-copy">Unified storage is required for device pairing.</p>';
+    return;
+  }
+  const currentId = repository.metadata.deviceIdentity.id;
+  elements.authorizedDeviceList.innerHTML = (repository.metadata.authorizedDevices || []).map(device => {
+    const current = device.deviceId === currentId;
+    const status = current ? "This device" : device.blockedAt ? "Blocked locally" : "Authorized";
+    const label = device.label || (current ? "This device" : "Paired device");
+    const action = !current && !device.blockedAt ? `<button type="button" data-block-device="${escapeHtml(device.deviceId)}">Block locally</button>` : "";
+    return `<div class="authorized-device-row"><span><strong>${escapeHtml(label)} · ${escapeHtml(status)}</strong><small>${escapeHtml(shortDeviceId(device.deviceId))}</small></span>${action}</div>`;
+  }).join("");
+}
+
+function showPairingOutput(title, payload, verificationCode = "") {
+  elements.pairingOutput.hidden = false;
+  elements.pairingOutputTitle.textContent = title;
+  elements.pairingOutputText.value = JSON.stringify(payload);
+  elements.pairingVerificationCode.hidden = !verificationCode;
+  elements.pairingVerificationCode.textContent = verificationCode ? `Verify ${verificationCode}` : "";
+}
+
+async function persistPairingDeviceLabel() {
+  const label = elements.pairingDeviceLabel.value.trim() || "This device";
+  if (repository?.metadata.syncDeviceLabel !== label) await repository.setMeta("syncDeviceLabel", label);
+  return label;
+}
+
+async function reloadRemoteState() {
+  state = await repository.load();
+  persistedState = structuredClone(state);
+  hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(repository.metadata.globalHiddenChatIds || []);
+  renderStickerGrid();
+  render();
+}
+
 function runningAsInstalledApp() {
   return window.matchMedia?.("(display-mode: standalone)").matches || navigator.standalone === true;
 }
@@ -3210,8 +3264,97 @@ $("#settingsButton").addEventListener("click", () => {
   renderTrash();
   renderRecoveryPoints();
   renderStorageDiagnostics();
+  renderSyncDeviceStatus();
   refreshOfflineAppStatus();
 });
+$("#openPairingButton").addEventListener("click", () => {
+  if (!repository) return showToast("Unified storage is required for pairing", 5000);
+  elements.settingsDialog.close();
+  elements.pairingDeviceLabel.value = repository.metadata.syncDeviceLabel || "This device";
+  elements.pairingInputText.value = "";
+  elements.pairingOutput.hidden = true;
+  elements.pairingResult.textContent = "Automatic transport remains off.";
+  renderAuthorizedDevices();
+  elements.pairingDialog.showModal();
+});
+$("#createPairingInvitationButton").addEventListener("click", async () => {
+  try {
+    const label = await persistPairingDeviceLabel();
+    const { invitation, verificationCode } = await repository.createPairingInvitation(label);
+    showPairingOutput("Invitation ready — paste it on the other device", invitation, verificationCode);
+    elements.pairingResult.textContent = "Compare the same verification code on both devices before approving the request.";
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  }
+});
+$("#createEncryptedUpdateButton").addEventListener("click", async () => {
+  try {
+    const envelope = await repository.createEncryptedUpdate();
+    showPairingOutput("Encrypted update ready", envelope);
+    elements.pairingResult.textContent = "Paste this text on an authorized device. Message content is encrypted.";
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  }
+});
+$("#copyPairingOutputButton").addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(elements.pairingOutputText.value);
+    elements.pairingResult.textContent = "Generated text copied.";
+  } catch (_) {
+    elements.pairingOutputText.select();
+    elements.pairingResult.textContent = "Copy was unavailable. The generated text is selected.";
+  }
+});
+$("#processPairingInputButton").addEventListener("click", async () => {
+  try {
+    const payload = JSON.parse(elements.pairingInputText.value.trim());
+    const label = await persistPairingDeviceLabel();
+    if (payload.type === "selfchat-pairing-invitation") {
+      const { request, verificationCode } = await repository.createPairingRequest(payload, label);
+      showPairingOutput("Pairing request ready — return it to the inviting device", request, verificationCode);
+      elements.pairingResult.textContent = "Confirm that this verification code matches the inviting device.";
+    } else if (payload.type === "selfchat-enrollment-request") {
+      const { grant, verificationCode } = await repository.issuePairingGrant(payload);
+      showPairingOutput("Pairing grant ready — return it to the new device", grant, verificationCode);
+      elements.pairingResult.textContent = "The new device is now authorized. It must accept this short-lived grant.";
+      renderAuthorizedDevices();
+    } else if (payload.type === "selfchat-enrollment-grant") {
+      const result = await repository.acceptPairingGrant(payload);
+      elements.pairingOutput.hidden = true;
+      elements.pairingResult.textContent = `Paired successfully with profile ${shortDeviceId(result.profileId)}.`;
+      renderAuthorizedDevices();
+    } else if (payload.header?.type === "selfchat-operation-envelope") {
+      const result = await repository.applyRemoteEnvelope(payload);
+      await reloadRemoteState();
+      elements.pairingResult.textContent = `Applied ${result.applied} of ${result.received} authenticated operation${result.received === 1 ? "" : "s"}.`;
+    } else {
+      throw new Error("This is not recognized SelfChat pairing or encrypted update text");
+    }
+    elements.pairingInputText.value = "";
+    renderSyncDeviceStatus();
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  }
+});
+elements.authorizedDeviceList.addEventListener("click", async event => {
+  const button = event.target.closest("[data-block-device]");
+  if (!button) return;
+  const approved = await requestConfirmation({
+    title: "Block this device locally?",
+    message: "Future encrypted updates from this device will be rejected here. This does not rotate the shared key yet, so the other device may still retain prior access.",
+    confirmLabel: "Block locally"
+  });
+  if (!approved) return;
+  try {
+    await repository.blockAuthorizedDevice(button.dataset.blockDevice);
+    renderAuthorizedDevices();
+    renderSyncDeviceStatus();
+    elements.pairingResult.textContent = "Device blocked locally.";
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  }
+});
+$("#closePairingButton").addEventListener("click", () => elements.pairingDialog.close());
 elements.installAppButton.addEventListener("click", async () => {
   if (!deferredInstallPrompt) return refreshOfflineAppStatus();
   const prompt = deferredInstallPrompt;

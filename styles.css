@@ -491,10 +491,26 @@ body.message-dragging, body.message-dragging * { cursor: grabbing !important; us
 .message-link:hover { color: white; }
 @keyframes target-flash { 0%, 35% { box-shadow: 0 0 0 5px rgba(255,227,109,.45); } 100% { box-shadow: 0 1px 1px var(--shadow); } }
 
-.install-section, .storage-diagnostics { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: #111b21; font-size: 10px; line-height: 1.5; }
+.install-section, .sync-section, .storage-diagnostics { margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--muted); background: #111b21; font-size: 10px; line-height: 1.5; }
 .install-section .option-row { margin-top: 8px; }
 .install-section p { margin: 6px 0 0; }
 .install-section .dialog-copy { font-size: 10px; }
+.sync-section p { margin: 6px 0; }
+.sync-section .option-row { margin-top: 7px; }
+.pairing-card { display: grid; gap: 12px; }
+.pairing-card h2 { margin-bottom: 2px; }
+.pairing-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.pairing-output { display: grid; gap: 8px; padding: 12px; border: 1px solid #356b60; border-radius: 9px; background: rgba(0,168,132,.08); }
+.pairing-output textarea, .pairing-card > textarea { min-height: 110px; font-family: Consolas, "Courier New", monospace; font-size: 10px; }
+.pairing-code { width: fit-content; padding: 6px 9px; border-radius: 6px; color: #111b21; background: var(--accent); font-family: Consolas, monospace; font-size: 14px; font-weight: 700; letter-spacing: .08em; }
+.pairing-result { min-height: 18px; margin: 0; color: var(--accent); font-size: 11px; line-height: 1.5; }
+.paired-device-section { display: grid; gap: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.authorized-device-list { display: grid; gap: 7px; }
+.authorized-device-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; background: #111b21; }
+.authorized-device-row span { display: grid; min-width: 0; }
+.authorized-device-row strong, .authorized-device-row small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.authorized-device-row small { color: var(--muted); font-family: Consolas, monospace; font-size: 9px; }
+.authorized-device-row button { flex: 0 0 auto; padding: 5px 8px; border: 1px solid #6c3440; border-radius: 6px; color: var(--danger); background: transparent; cursor: pointer; font-size: 10px; }
 .dialog-warning { margin: 0; padding: 10px 11px; border-left: 3px solid #f3c969; color: #d9e0e3; background: rgba(243,201,105,.08); font-size: 11px; line-height: 1.5; }
 .chat-notes-card { width: min(650px, calc(100vw - 42px)); }
 .chat-notes-card textarea { min-height: 260px; resize: vertical; line-height: 1.5; }

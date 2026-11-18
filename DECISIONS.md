@@ -298,3 +298,13 @@ Operation batches use AES-256-GCM with the profile key, authenticate profile ID,
 The backend boundary is a transport-neutral interface for encrypted envelopes and encrypted attachment chunks. It is unconfigured and disabled by default. Version 2.6.0 adds no endpoint, backend instance, account, pairing UI, remote operation application, blob transfer, or message transmission. Local plaintext storage remains unchanged; the sync key and private credentials stay inside the same browser-local privacy boundary until explicit pairing is implemented.
 
 Reason: encryption and device authorization must be specified, persisted, and adversarially tested before any backend can receive user data or any remote operation can modify the local projection.
+
+## 2026-11-18 — SC-20 direct pairing and transactional remote application
+
+SelfChat exposes a direct-transfer pairing ceremony in Data settings. An existing device creates a signed ten-minute invitation and verification code; the joining device returns a signed request; the existing device returns a short-lived encrypted grant. The user compares the same code on both devices. Pairing text moves only through an explicit user copy/paste action, and no application transport or account is introduced.
+
+Paired devices can manually exchange signed encrypted operation envelopes for testing. On receipt, SelfChat verifies the profile, authorized unblocked signer, monotonic envelope sequence, immutable operation identity, supported stores and actions, entity/value consistency, and the exclusion of device-local metadata. It then stores fresh operations, applies only deterministic conflict winners, advances the Lamport clock, and commits the replay cursor in one IndexedDB transaction. Normal record deletion propagates through the same winner rule.
+
+Device blocking is intentionally local in v2.7.0 and is labeled as such. It rejects future envelopes on that browser but does not claim cryptographic revocation because the blocked device still knows the shared profile key. Automatic transport, key rotation, attachment chunks, permanent-erasure tombstones, and compaction remain disabled or unimplemented.
+
+Reason: the enrollment and remote-application boundary must be usable and transactionally testable before backend selection, while revocation limitations must stay explicit rather than creating a false security guarantee.

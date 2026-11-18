@@ -1,10 +1,10 @@
 # SelfChat
 
-SelfChat v2.6.0 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v2.7.0 is a private, desktop-first message stream organized into multiple chats containing only you.
 
 It supports fast text entry, a derived chronological All Messages view with per-chat visibility controls, chat-specific notes, a two-chat desktop split view, pinned and manually ordered chats, titled/tagged/duplicated messages, direct message links, starred and permanently pinned messages, collapsible long messages, fenced code blocks with copy controls, media/link/file galleries, type and date-filtered search, keyboard chat switching, custom local-image chat avatars, replies with quoted context, images, stickers, generic file attachments, local search, File Explorer-style message selection and drag-to-move, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 
-The first two SC-20 implementation milestones add the local synchronization substrate and its security boundary: durable device and sync-profile identities, atomic entity operation tracking, Lamport ordering, idempotent merging, authenticated device-enrollment grants, and signed AES-GCM operation envelopes. The backend adapter is deliberately unconfigured, so SelfChat still does not transmit data. Pairing UI, remote application, attachment transfer, and a deployed backend remain future SC-20 work.
+The first three SC-20 implementation milestones add the local synchronization substrate, its security boundary, and a manual pairing/test path: durable device and sync-profile identities, atomic entity operations, authenticated short-lived device enrollment, signed AES-GCM envelopes, authorized-device controls, transactional remote application, and replay cursors. The backend adapter remains unconfigured, so SelfChat still does not transmit data automatically. Attachment transfer, key rotation, compaction, and a deployed backend remain future SC-20 work.
 
 ## Run locally
 
@@ -31,6 +31,8 @@ The domain is attached to the project and follows future production deployments 
 - Each local entity change commits an immutable operation and logical clock update in the same transaction. Existing unified data is preserved and receives a one-time bootstrap history when schema version 2 opens.
 - Device identity is random and local to the current browser profile and origin. A local sync profile key and per-device signing/key-agreement credentials are created once and retained without changing message data.
 - Enrollment requests prove possession of the requesting device key. A trusted device can sign a short-lived grant and transfer the profile key through ephemeral ECDH plus HKDF; operation envelopes use AES-256-GCM and device signatures, with authenticated sequence metadata for replay rejection.
+- Data settings provides a direct-transfer pairing ceremony with matching verification codes. Authorized devices can exchange encrypted update text manually; received operations are validated and applied atomically, with deterministic conflicts and durable replay rejection.
+- Blocking a device currently prevents its future envelopes from applying on that browser only. It does not rotate the shared profile key, so the interface states this limitation explicitly.
 - The backend boundary accepts encrypted envelopes and attachment chunks only, but no adapter, endpoint, account, or transport is configured. Attachment operations still track blob references and metadata without duplicating blob bytes.
 - Optional custom chat avatars are locally cropped and stored with other attachment blobs; emoji icons remain available as fallbacks.
 - On the first run of this storage version, v0.9.2 data is copied and count-verified before the unified database activates. The old sources remain in place for this version.

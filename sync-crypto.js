@@ -108,6 +108,9 @@
     profileId,
     nonce = base64UrlEncode(randomBytes(16)),
     createdAt = new Date().toISOString(),
+    invitationHash = null,
+    authorizerDeviceId = null,
+    deviceLabel = null,
     crypto: cryptoOverride
   } = {}) {
     if (!profileId) throw new Error("A sync profile ID is required");
@@ -119,7 +122,10 @@
       nonce,
       createdAt,
       signingPublicJwk: credentials.signing.publicJwk,
-      agreementPublicJwk: credentials.agreement.publicJwk
+      agreementPublicJwk: credentials.agreement.publicJwk,
+      ...(invitationHash ? { invitationHash } : {}),
+      ...(authorizerDeviceId ? { authorizerDeviceId } : {}),
+      ...(deviceLabel ? { deviceLabel: String(deviceLabel).slice(0, 80) } : {})
     };
     return { ...request, proof: await sign(request, credentials.signing.privateJwk, cryptoOverride) };
   }
@@ -128,6 +134,40 @@
     if (request?.version !== 1 || request?.type !== "selfchat-enrollment-request" || !request.deviceId || !request.profileId || !request.nonce) return false;
     const { proof, ...body } = request;
     return verify(body, proof, request.signingPublicJwk, cryptoOverride);
+  }
+
+  async function createPairingInvitation(credentials, profile, {
+    nonce = base64UrlEncode(randomBytes(16)),
+    createdAt = new Date().toISOString(),
+    expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString(),
+    deviceLabel = null,
+    crypto: cryptoOverride
+  } = {}) {
+    if (!profile?.id) throw new Error("A sync profile is required");
+    const invitation = {
+      version: 1,
+      type: "selfchat-pairing-invitation",
+      profileId: profile.id,
+      authorizerDeviceId: credentials.deviceId,
+      authorizerSigningPublicJwk: credentials.signing.publicJwk,
+      nonce,
+      createdAt,
+      expiresAt,
+      ...(deviceLabel ? { deviceLabel: String(deviceLabel).slice(0, 80) } : {})
+    };
+    return { ...invitation, signature: await sign(invitation, credentials.signing.privateJwk, cryptoOverride) };
+  }
+
+  async function verifyPairingInvitation(invitation, { now = Date.now(), crypto: cryptoOverride } = {}) {
+    if (invitation?.version !== 1 || invitation?.type !== "selfchat-pairing-invitation" || !invitation.profileId || !invitation.authorizerDeviceId || !invitation.nonce) return false;
+    if (!Number.isFinite(Date.parse(invitation.expiresAt)) || now > Date.parse(invitation.expiresAt)) return false;
+    const { signature, ...body } = invitation;
+    return verify(body, signature, invitation.authorizerSigningPublicJwk, cryptoOverride);
+  }
+
+  async function pairingVerificationCode(value, cryptoOverride) {
+    const digest = base64UrlEncode(await sha256(stableStringify(value), cryptoOverride)).slice(0, 12).toUpperCase();
+    return digest.match(/.{1,4}/g).join("-");
   }
 
   async function deriveEnrollmentKey(privateJwk, publicJwk, salt, info, cryptoOverride) {
@@ -252,6 +292,9 @@
     generateProfileKey,
     createEnrollmentRequest,
     verifyEnrollmentRequest,
+    createPairingInvitation,
+    verifyPairingInvitation,
+    pairingVerificationCode,
     issueEnrollmentGrant,
     acceptEnrollmentGrant,
     createOperationEnvelope,

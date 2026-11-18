@@ -78,3 +78,17 @@ test("operation envelopes encrypt content, authenticate headers, and reject repl
     /signature is invalid/
   );
 });
+
+test("pairing invitations are signed, short-lived, and have a stable comparison code", async () => {
+  const credentials = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const invitation = await syncCrypto.createPairingInvitation(credentials, { id: "profile-1" }, {
+    nonce: "pairing-nonce",
+    createdAt: "2026-11-18T12:00:00.000Z",
+    expiresAt: "2026-11-18T12:10:00.000Z",
+    crypto: webcrypto
+  });
+  assert.equal(await syncCrypto.verifyPairingInvitation(invitation, { now: Date.parse("2026-11-18T12:05:00.000Z"), crypto: webcrypto }), true);
+  assert.equal(await syncCrypto.verifyPairingInvitation(invitation, { now: Date.parse("2026-11-18T12:11:00.000Z"), crypto: webcrypto }), false);
+  assert.equal(await syncCrypto.verifyPairingInvitation({ ...invitation, profileId: "attacker" }, { now: Date.parse("2026-11-18T12:05:00.000Z"), crypto: webcrypto }), false);
+  assert.match(await syncCrypto.pairingVerificationCode(invitation, webcrypto), /^[A-Z0-9_-]{4}-[A-Z0-9_-]{4}-[A-Z0-9_-]{4}$/);
+});

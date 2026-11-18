@@ -1,10 +1,12 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { indexedDB, IDBKeyRange } = require("fake-indexeddb");
+const { webcrypto } = require("node:crypto");
 
 global.indexedDB = indexedDB;
 global.IDBKeyRange = IDBKeyRange;
 global.SelfChatStorageCore = require("../storage-core.js");
+global.SelfChatSyncCrypto = require("../sync-crypto.js");
 
 const values = new Map();
 global.localStorage = {
@@ -16,6 +18,7 @@ global.localStorage = {
 
 const storage = require("../storage.js");
 const core = global.SelfChatStorageCore;
+const syncCrypto = global.SelfChatSyncCrypto;
 const fallback = { activeChatId: "unsorted", chats: [], messages: [], customStickers: [], trash: [], deletedChatIds: [], deletedMessageIds: [], drafts: {} };
 const fixture = core.normalizeState({
   activeChatId: "topic",
@@ -380,4 +383,57 @@ test("permanent deletion also removes matching local sync history", async () => 
   const current = core.normalizeState({ ...fixture, messages: fixture.messages.filter(message => message.id !== target.id), trash: [] }, fallback);
   await repository.purgeEveryCopy(targets, current);
   assert.equal((await repository.listOperations()).some(operation => operation.entityId === target.id || operation.entityId === target.imageId), false);
+});
+
+test("pairing joins an invited profile and persists both trusted device identities", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "joining-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "temporary-profile", createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const authorizer = await syncCrypto.generateDeviceCredentials({ deviceId: "authorizer-device", crypto: webcrypto });
+  const invitedProfile = { id: "invited-profile", keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const invitation = await syncCrypto.createPairingInvitation(authorizer, invitedProfile, { deviceLabel: "Main PC", crypto: webcrypto });
+  const { request, verificationCode } = await repository.createPairingRequest(invitation, "Laptop");
+  const grant = await syncCrypto.issueEnrollmentGrant(request, authorizer, invitedProfile, { crypto: webcrypto });
+  const result = await repository.acceptPairingGrant(grant);
+  assert.equal(result.profileId, "invited-profile");
+  assert.equal(result.verificationCode, verificationCode);
+  assert.deepEqual(repository.metadata.authorizedDevices.map(device => device.deviceId), ["authorizer-device", "joining-device"]);
+  assert.equal(repository.metadata.syncProfile.keyMaterial, invitedProfile.keyMaterial);
+});
+
+test("authorized encrypted updates apply atomically and durable replay cursors reject retries", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "local-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "shared-profile", createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const remote = await syncCrypto.generateDeviceCredentials({ deviceId: "remote-device", crypto: webcrypto });
+  await repository.setMeta("authorizedDevices", [...repository.metadata.authorizedDevices, {
+    deviceId: remote.deviceId,
+    signingPublicJwk: remote.signing.publicJwk,
+    agreementPublicJwk: remote.agreement.publicJwk,
+    authorizedAt: new Date().toISOString(),
+    authorizedBy: "local-device"
+  }]);
+  const operation = { id: "remote-device:100", deviceId: "remote-device", counter: 100, store: "chats", entityType: "chat", entityId: "remote-chat", action: "put", recordedAt: new Date().toISOString(), value: { id: "remote-chat", name: "Remote", emoji: "R", createdAt: new Date().toISOString() } };
+  const envelope = await syncCrypto.createOperationEnvelope([operation], remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto });
+  assert.deepEqual(await repository.applyRemoteEnvelope(envelope), { received: 1, stored: 1, applied: 1, deviceId: "remote-device", sequence: 1 });
+  assert.equal((await repository.load()).chats.some(chat => chat.id === "remote-chat"), true);
+  assert.equal(repository.metadata.logicalClock, 100);
+  await assert.rejects(repository.applyRemoteEnvelope(envelope), /stale or replayed/);
+  assert.equal((await repository.listOperations()).filter(item => item.id === operation.id).length, 1);
+  const deletion = { id: "remote-device:101", deviceId: "remote-device", counter: 101, store: "chats", entityType: "chat", entityId: "remote-chat", action: "delete", recordedAt: new Date().toISOString() };
+  const deletionEnvelope = await syncCrypto.createOperationEnvelope([deletion], remote, repository.metadata.syncProfile, { sequence: 2, crypto: webcrypto });
+  assert.equal((await repository.applyRemoteEnvelope(deletionEnvelope)).applied, 1);
+  assert.equal((await repository.load()).chats.some(chat => chat.id === "remote-chat"), false);
+  await repository.blockAuthorizedDevice("remote-device");
+  const blockedEnvelope = await syncCrypto.createOperationEnvelope([{ ...operation, id: "remote-device:102", counter: 102, entityId: "blocked-chat", value: { ...operation.value, id: "blocked-chat" } }], remote, repository.metadata.syncProfile, { sequence: 3, crypto: webcrypto });
+  await assert.rejects(repository.applyRemoteEnvelope(blockedEnvelope), /not from an authorized device/);
+  assert.equal((await repository.load()).chats.some(chat => chat.id === "blocked-chat"), false);
 });

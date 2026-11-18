@@ -229,3 +229,13 @@ test("attachment operations track references without duplicating blob bytes", ()
   assert.deepEqual(result.operations[0].value, { id: "file-1", name: "notes.txt", type: "text/plain", size: 8 });
   assert.equal("blob" in result.operations[0].value, false);
 });
+
+test("remote operations reject signer mismatches, unsafe metadata, and malformed values", () => {
+  const valid = { id: "device-b:4", deviceId: "device-b", counter: 4, store: "messages", entityId: "m4", action: "put", recordedAt: "2026-11-18T12:00:00.000Z", value: { id: "m4", chatId: "unsorted", text: "remote", createdAt: "2026-11-18T12:00:00.000Z" } };
+  assert.deepEqual(core.validateRemoteSyncOperations([valid], "device-b"), [valid]);
+  assert.throws(() => core.validateRemoteSyncOperations([{ ...valid, deviceId: "device-c" }], "device-b"), /signer/);
+  assert.throws(() => core.validateRemoteSyncOperations([{ ...valid, store: "meta", entityId: "deviceCredentials", value: { key: "deviceCredentials", value: {} } }], "device-b"), /device-local metadata/);
+  assert.throws(() => core.validateRemoteSyncOperations([{ ...valid, value: { id: "another" } }], "device-b"), /does not match/);
+  assert.throws(() => core.validateRemoteSyncOperations([{ ...valid, store: "chats", entityId: "unsorted", action: "delete", value: undefined }], "device-b"), /Unsorted/);
+  assert.throws(() => core.validateRemoteSyncOperations([{ ...valid, store: "attachments", entityId: "a1", value: { id: "a1", size: 4, blob: {} } }], "device-b"), /attachment reference/);
+});

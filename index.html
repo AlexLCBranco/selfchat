@@ -8,7 +8,7 @@
   <title>SelfChat</title>
   <link rel="icon" href="icon.svg?v=3" type="image/svg+xml">
   <link rel="manifest" href="manifest.webmanifest">
-  <link rel="stylesheet" href="styles.css?v=41">
+  <link rel="stylesheet" href="styles.css?v=42">
 </head>
 <body>
   <div class="app" id="app">
@@ -42,7 +42,7 @@
       </div>
       <div class="sidebar-foot">
         <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v2.6.0</span>
+        <span class="app-version" title="SelfChat version">v2.7.0</span>
       </div>
     </aside>
 
@@ -333,6 +333,11 @@
         <button class="option-row" id="installAppButton" type="button" hidden><span>Install SelfChat</span><b>＋</b></button>
         <p class="dialog-copy" id="installAppHelp">Installation availability depends on this browser.</p>
       </div>
+      <div class="sync-section">
+        <div class="dialog-label">DEVICE PAIRING</div>
+        <p id="syncDeviceStatus">Encrypted identity ready. Automatic transport is off.</p>
+        <button class="option-row" id="openPairingButton" type="button"><span>Pair or sync devices</span><b>→</b></button>
+      </div>
       <div class="recovery-section">
         <div class="dialog-label">AUTOMATIC RECOVERY</div>
         <p id="recoveryStatus">Loading recovery points…</p>
@@ -340,6 +345,36 @@
       </div>
       <div class="storage-diagnostics" id="storageDiagnostics" aria-live="polite">Checking local storage…</div>
       <button class="button secondary full" id="closeSettingsButton" type="button">Done</button>
+    </div>
+  </dialog>
+
+  <dialog id="pairingDialog" class="wide-dialog">
+    <div class="dialog-card pairing-card">
+      <div class="dialog-label">ENCRYPTED DEVICE PAIRING</div>
+      <h2>Pair without a cloud account.</h2>
+      <p class="dialog-copy">Move the generated text directly between your devices. Compare the verification code on both screens before continuing. Pairing data expires after 10 minutes.</p>
+      <label for="pairingDeviceLabel">This device name</label>
+      <input id="pairingDeviceLabel" maxlength="80" placeholder="Main PC">
+      <div class="pairing-actions">
+        <button class="button secondary" id="createPairingInvitationButton" type="button">Create invitation</button>
+        <button class="button secondary" id="createEncryptedUpdateButton" type="button">Create encrypted update</button>
+      </div>
+      <div class="pairing-output" id="pairingOutput" hidden>
+        <strong id="pairingOutputTitle">Pairing data ready</strong>
+        <span class="pairing-code" id="pairingVerificationCode" hidden></span>
+        <textarea id="pairingOutputText" rows="6" readonly aria-label="Generated pairing data"></textarea>
+        <button class="button primary" id="copyPairingOutputButton" type="button">Copy generated text</button>
+      </div>
+      <label for="pairingInputText">Paste invitation, request, grant, or encrypted update</label>
+      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing or encrypted update text here"></textarea>
+      <button class="button primary full" id="processPairingInputButton" type="button">Process pasted text</button>
+      <p class="pairing-result" id="pairingResult" aria-live="polite"></p>
+      <div class="paired-device-section">
+        <div class="dialog-label">AUTHORIZED DEVICES</div>
+        <div id="authorizedDeviceList" class="authorized-device-list"></div>
+        <p class="dialog-warning">Blocking is local until key rotation is implemented. A previously paired device may still hold the shared key.</p>
+      </div>
+      <button class="button secondary full" id="closePairingButton" type="button">Done</button>
     </div>
   </dialog>
 
@@ -469,11 +504,11 @@
     <button type="button" role="menuitem" data-chat-action="down">Move down</button>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="storage-core.js?v=8"></script>
-  <script src="sync-crypto.js?v=1"></script>
+  <script src="storage-core.js?v=9"></script>
+  <script src="sync-crypto.js?v=2"></script>
   <script src="sync-backend.js?v=1"></script>
-  <script src="storage.js?v=8"></script>
+  <script src="storage.js?v=9"></script>
   <script src="app-core.js?v=14"></script>
-  <script src="app.js?v=46"></script>
+  <script src="app.js?v=47"></script>
 </body>
 </html>

@@ -26,6 +26,7 @@
     ["attachments", "attachment", "attachmentsPut", "attachmentsDelete"],
     ["meta", "preference", "metaPut", "metaDelete"]
   ]);
+  const REMOTE_SYNC_STORES = Object.freeze(["chats", "messages", "stickers", "drafts", "trash", "attachments", "meta"]);
 
   function operationValue(store, record) {
     if (store !== "attachments") return clone(record);
@@ -93,6 +94,41 @@
       if (!current || compareSyncOperations(current, operation) < 0) winners.set(key, operation);
     });
     return [...winners.values()].sort(compareSyncOperations);
+  }
+
+  function validateRemoteSyncOperations(operations, envelopeDeviceId) {
+    if (!Array.isArray(operations) || !operations.length) throw new Error("A remote envelope must contain operations");
+    if (operations.length > 10000) throw new Error("A remote envelope contains too many operations");
+    const ids = new Set();
+    return operations.map(operation => {
+      if (!operation || typeof operation !== "object") throw new Error("Invalid remote operation");
+      if (typeof operation.id !== "string" || !operation.id || ids.has(operation.id)) throw new Error("Remote operation IDs must be unique");
+      ids.add(operation.id);
+      if (operation.deviceId !== envelopeDeviceId) throw new Error("Remote operation signer does not match its envelope");
+      if (!Number.isSafeInteger(operation.counter) || operation.counter < 1 || operation.id !== `${operation.deviceId}:${operation.counter}`) {
+        throw new Error("Remote operation has invalid logical ordering");
+      }
+      if (!REMOTE_SYNC_STORES.includes(operation.store)) throw new Error("Remote operation targets an unsupported store");
+      if (typeof operation.entityId !== "string" || !operation.entityId) throw new Error("Remote operation is missing its entity ID");
+      if (!["put", "delete"].includes(operation.action)) throw new Error("Remote operation has an unsupported action");
+      if (!Number.isFinite(Date.parse(operation.recordedAt))) throw new Error("Remote operation has an invalid timestamp");
+      if (operation.store === "meta" && operation.entityId !== "globalHiddenChatIds") throw new Error("Remote operation targets device-local metadata");
+      if (operation.store === "chats" && operation.entityId === UNSORTED_CHAT.id && operation.action === "delete") throw new Error("The permanent Unsorted chat cannot be deleted remotely");
+      if (operation.action === "put") {
+        if (!operation.value || typeof operation.value !== "object") throw new Error("Remote put operation is missing its value");
+        const valueId = operation.store === "drafts" ? operation.value.chatId : operation.store === "meta" ? operation.value.key : operation.value.id;
+        if (valueId !== operation.entityId) throw new Error("Remote operation value does not match its entity ID");
+        if (operation.store === "chats" && (typeof operation.value.name !== "string" || !Number.isFinite(Date.parse(operation.value.createdAt)))) throw new Error("Remote chat value is invalid");
+        if (operation.store === "messages" && (typeof operation.value.chatId !== "string" || !Number.isFinite(Date.parse(operation.value.createdAt)))) throw new Error("Remote message value is invalid");
+        if (operation.store === "drafts" && typeof operation.value.text !== "string") throw new Error("Remote draft value is invalid");
+        if (operation.store === "trash" && (!operation.value.entityId || !["chat", "message"].includes(operation.value.entityType))) throw new Error("Remote Trash value is invalid");
+        if (operation.store === "attachments" && ("blob" in operation.value || !Number.isFinite(Number(operation.value.size)) || Number(operation.value.size) < 0)) throw new Error("Remote attachment reference is invalid");
+        if (operation.store === "meta" && (!Array.isArray(operation.value.value) || operation.value.value.some(id => typeof id !== "string"))) throw new Error("Remote preference value is invalid");
+      } else if ("value" in operation) {
+        throw new Error("Remote delete operation must not contain a value");
+      }
+      return clone(operation);
+    });
   }
 
   function bootstrapSyncDiff(state, attachments = []) {
@@ -390,6 +426,7 @@
     UNSORTED_CHAT, normalizeState, mergeStates, migrationOperations, replayOperations, validateState,
     referencedAttachmentIds, redactState, recoverableAttachmentRecords, messageVersionTime,
     stateCounts, backupPayload, parseBackup, newestSnapshotPerDay, syncOperationsForDiff,
-    compareSyncOperations, mergeSyncOperations, resolveSyncConflicts, bootstrapSyncDiff
+    compareSyncOperations, mergeSyncOperations, resolveSyncConflicts, bootstrapSyncDiff,
+    REMOTE_SYNC_STORES, validateRemoteSyncOperations
   };
 });

@@ -362,17 +362,39 @@
     await ensureSyncSecurityFoundation(db, syncFoundation.deviceIdentity, adapters);
     const metadata = await getAllMeta(db);
     let pendingCommit = Promise.resolve();
+    async function runSerialized(work) {
+      const previousCommit = pendingCommit;
+      let releaseCommit;
+      pendingCommit = new Promise(resolve => { releaseCommit = resolve; });
+      await previousCommit;
+      try {
+        return await work();
+      } finally {
+        releaseCommit();
+      }
+    }
+    async function persistSecurityMetadata(updates) {
+      const transaction = db.transaction("meta", "readwrite");
+      const meta = transaction.objectStore("meta");
+      const updatedAt = new Date().toISOString();
+      Object.entries(updates).forEach(([key, value]) => meta.put({ key, value, updatedAt }));
+      await transactionDone(transaction);
+      Object.assign(metadata, updates);
+    }
+    function materializeRemoteWinner(stores, operation) {
+      if (operation.store === "attachments") return;
+      const store = stores[operation.store];
+      if (!store) throw new Error("Remote operation targets an unavailable store");
+      if (operation.action === "delete") store.delete(operation.entityId);
+      else store.put(operation.value);
+    }
     const repository = {
       db,
       initialState,
       metadata,
       async load() { return loadState(db, adapters.defaultState); },
       async commit(diff, { significant = true, snapshotState = null } = {}) {
-        const previousCommit = pendingCommit;
-        let releaseCommit;
-        pendingCommit = new Promise(resolve => { releaseCommit = resolve; });
-        await previousCommit;
-        try {
+        return runSerialized(async () => {
           const today = new Date().toISOString().slice(0, 10);
           const createDailySnapshot = significant && snapshotState && metadata.lastSnapshotDay !== today;
           const sync = core.syncOperationsForDiff(diff, {
@@ -395,9 +417,7 @@
             metadata.lastSnapshotDay = today;
             await pruneSnapshots(db);
           }
-        } finally {
-          releaseCommit();
-        }
+        });
       },
       async replaceState(value) {
         const next = core.normalizeState(value, adapters.defaultState);
@@ -437,6 +457,132 @@
       async listOperations() {
         const operations = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
         return core.mergeSyncOperations(operations);
+      },
+      async createPairingInvitation(deviceLabel = "") {
+        const invitation = await syncCrypto.createPairingInvitation(metadata.deviceCredentials, metadata.syncProfile, { deviceLabel });
+        return { invitation, verificationCode: await syncCrypto.pairingVerificationCode(invitation) };
+      },
+      async createPairingRequest(invitation, deviceLabel = "") {
+        if (!(await syncCrypto.verifyPairingInvitation(invitation))) throw new Error("Pairing invitation is invalid or expired");
+        const verificationCode = await syncCrypto.pairingVerificationCode(invitation);
+        const request = await syncCrypto.createEnrollmentRequest(metadata.deviceCredentials, {
+          profileId: invitation.profileId,
+          invitationHash: verificationCode,
+          authorizerDeviceId: invitation.authorizerDeviceId,
+          deviceLabel
+        });
+        await persistSecurityMetadata({ pendingPairing: { invitation, request, verificationCode, createdAt: new Date().toISOString() } });
+        return { request, verificationCode };
+      },
+      async issuePairingGrant(request) {
+        if (!(await syncCrypto.verifyEnrollmentRequest(request))) throw new Error("Pairing request proof is invalid");
+        const requestTime = Date.parse(request.createdAt);
+        if (!Number.isFinite(requestTime) || requestTime > Date.now() + 5 * 60 * 1000 || Date.now() - requestTime > 15 * 60 * 1000) {
+          throw new Error("Pairing request is expired");
+        }
+        if (request.profileId !== metadata.syncProfile.id || request.authorizerDeviceId !== metadata.deviceIdentity.id) {
+          throw new Error("Pairing request targets another profile or device");
+        }
+        const grant = await syncCrypto.issueEnrollmentGrant(request, metadata.deviceCredentials, metadata.syncProfile);
+        const authorizedDevices = (metadata.authorizedDevices || []).filter(device => device.deviceId !== request.deviceId);
+        authorizedDevices.push({
+          deviceId: request.deviceId,
+          label: request.deviceLabel || "Paired device",
+          signingPublicJwk: request.signingPublicJwk,
+          agreementPublicJwk: request.agreementPublicJwk,
+          authorizedAt: new Date().toISOString(),
+          authorizedBy: metadata.deviceIdentity.id
+        });
+        await persistSecurityMetadata({ authorizedDevices });
+        return { grant, verificationCode: request.invitationHash || "" };
+      },
+      async acceptPairingGrant(grant) {
+        const pending = metadata.pendingPairing;
+        if (!pending?.invitation || !pending?.request) throw new Error("No pairing request is pending on this device");
+        const trustedAuthorizer = {
+          deviceId: pending.invitation.authorizerDeviceId,
+          signingPublicJwk: pending.invitation.authorizerSigningPublicJwk
+        };
+        const keyMaterial = await syncCrypto.acceptEnrollmentGrant(grant, pending.request, metadata.deviceCredentials, trustedAuthorizer);
+        const selfDevice = {
+          deviceId: metadata.deviceIdentity.id,
+          label: pending.request.deviceLabel || "This device",
+          signingPublicJwk: metadata.deviceCredentials.signing.publicJwk,
+          agreementPublicJwk: metadata.deviceCredentials.agreement.publicJwk,
+          authorizedAt: new Date().toISOString(),
+          authorizedBy: trustedAuthorizer.deviceId
+        };
+        const authorizer = {
+          deviceId: trustedAuthorizer.deviceId,
+          label: pending.invitation.deviceLabel || "Authorizing device",
+          signingPublicJwk: trustedAuthorizer.signingPublicJwk,
+          authorizedAt: pending.invitation.createdAt,
+          authorizedBy: trustedAuthorizer.deviceId
+        };
+        const syncProfile = { version: 1, id: grant.profileId, createdAt: pending.invitation.createdAt, algorithm: "AES-GCM-256", keyMaterial };
+        await persistSecurityMetadata({
+          syncProfile,
+          authorizedDevices: [authorizer, selfDevice],
+          pendingPairing: null,
+          syncReplayCursors: {},
+          outboundEnvelopeSequence: 0
+        });
+        return { profileId: syncProfile.id, verificationCode: pending.verificationCode };
+      },
+      async blockAuthorizedDevice(deviceId) {
+        if (deviceId === metadata.deviceIdentity.id) throw new Error("This device cannot block itself");
+        const authorizedDevices = (metadata.authorizedDevices || []).map(device => device.deviceId === deviceId
+          ? { ...device, blockedAt: new Date().toISOString() }
+          : device);
+        if (!authorizedDevices.some(device => device.deviceId === deviceId)) throw new Error("Authorized device was not found");
+        await persistSecurityMetadata({ authorizedDevices });
+        return authorizedDevices;
+      },
+      async createEncryptedUpdate() {
+        return runSerialized(async () => {
+          const operations = (await repository.listOperations()).filter(operation => operation.deviceId === metadata.deviceIdentity.id);
+          if (!operations.length) throw new Error("This device has no operations to share");
+          const sequence = (Number.isSafeInteger(metadata.outboundEnvelopeSequence) ? metadata.outboundEnvelopeSequence : 0) + 1;
+          const envelope = await syncCrypto.createOperationEnvelope(operations, metadata.deviceCredentials, metadata.syncProfile, { sequence });
+          await persistSecurityMetadata({ outboundEnvelopeSequence: sequence });
+          return envelope;
+        });
+      },
+      async applyRemoteEnvelope(envelope) {
+        return runSerialized(async () => {
+          const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt);
+          if (!device) throw new Error("Encrypted update is not from an authorized device");
+          const cursors = { ...(metadata.syncReplayCursors || {}) };
+          const opened = await syncCrypto.openOperationEnvelope(envelope, metadata.syncProfile, device, {
+            minimumSequence: Number(cursors[device.deviceId]) || 0
+          });
+          const incoming = core.validateRemoteSyncOperations(opened.operations, device.deviceId);
+          const existing = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
+          const existingById = new Map(existing.map(operation => [operation.id, operation]));
+          const fresh = incoming.filter(operation => {
+            const known = existingById.get(operation.id);
+            if (known && syncCrypto.stableStringify(known) !== syncCrypto.stableStringify(operation)) {
+              throw new Error("Encrypted update changes an existing immutable operation");
+            }
+            return !known;
+          });
+          const freshIds = new Set(fresh.map(operation => operation.id));
+          const winners = core.resolveSyncConflicts([...existing, ...fresh]).filter(operation => freshIds.has(operation.id));
+          const logicalClock = Math.max(Number(metadata.logicalClock) || 0, ...incoming.map(operation => operation.counter));
+          cursors[device.deviceId] = opened.header.sequence;
+          const transaction = db.transaction(TRANSACTION_STORES, "readwrite");
+          const stores = Object.fromEntries(TRANSACTION_STORES.map(name => [name, transaction.objectStore(name)]));
+          fresh.forEach(operation => stores.operations.add(operation));
+          winners.forEach(operation => materializeRemoteWinner(stores, operation));
+          stores.meta.put({ key: "logicalClock", value: logicalClock, updatedAt: new Date().toISOString() });
+          stores.meta.put({ key: "syncReplayCursors", value: cursors, updatedAt: new Date().toISOString() });
+          await transactionDone(transaction);
+          metadata.logicalClock = logicalClock;
+          metadata.syncReplayCursors = cursors;
+          const visibilityWinner = winners.find(operation => operation.store === "meta" && operation.entityId === "globalHiddenChatIds");
+          if (visibilityWinner) metadata.globalHiddenChatIds = visibilityWinner.action === "put" ? visibilityWinner.value.value : undefined;
+          return { received: incoming.length, stored: fresh.length, applied: winners.length, deviceId: device.deviceId, sequence: opened.header.sequence };
+        });
       },
       async listSnapshots() { return requestResult(db.transaction("snapshots", "readonly").objectStore("snapshots").getAll()); },
       async getMeta(key) { return (await getMeta(db, key))?.value; },

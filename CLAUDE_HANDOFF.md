@@ -4,20 +4,31 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source and production version is **v2.6.0** at `https://selfchat-home.vercel.app` (deployment `dpl_Degghnk5MmJwMATFSf911hURbe6z`).
-- v2.5.0 provides the local synchronization substrate. v2.6.0 adds locally persisted profile/device key material, authenticated device-enrollment primitives, signed encrypted operation envelopes, replay checks, and a disabled transport-neutral backend boundary.
-- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no pairing UI, backend instance, account, network transport, remote-operation application, deletion propagation, attachment transfer, or compaction.
+- The current visible source version is **v2.7.0**. Production remains **v2.6.0** at `https://selfchat-home.vercel.app` until the pending v2.7.0 release is deployed and verified.
+- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing, authorized-device controls, manual encrypted updates, and transactional remote-operation application.
+- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, attachment transfer, key rotation, permanent-erasure tombstone propagation, or compaction.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
 - `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
 
 ## Delivery state
 
-- **Implemented:** v2.6.0 SC-20 security foundation exists in the current working tree.
-- **Tested:** yes. All required syntax checks, 74 automated tests, `git diff --check`, and the local browser persistence/error pass described below passed on 2026-11-18.
-- **Committed:** yes. Implementation commit `7af9896` contains the v2.6.0 source, tests, decisions, backlog, and initial handoff report.
-- **Pushed:** yes. `origin/main` was verified at full commit `7af9896b30dd59eedfae404371fa87bb956685ec` after the implementation push; the final deployment-report commit is synchronized separately.
-- **Deployed:** yes. Deployment `dpl_Degghnk5MmJwMATFSf911hURbe6z` is READY and aliased to `https://selfchat-home.vercel.app`.
-- **Production verified:** yes. An authenticated Vercel fetch returned v2.6.0 and its new sync assets. A browser load/reload at the stable URL preserved the hosted-origin message, displayed `Encrypted sync identity ready · transport off`, and produced no warnings or errors.
+- **Implemented:** v2.7.0 SC-20 pairing and remote-application foundation exists in the current working tree.
+- **Tested:** yes. All required syntax checks, 78 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
+- **Committed:** pending.
+- **Pushed:** pending.
+- **Deployed:** pending; production still serves v2.6.0.
+- **Production verified:** pending for v2.7.0; the last verified production release is v2.6.0.
+
+## SC-20 pairing and remote application — 2026-11-18
+
+- **Direct pairing ceremony:** Data settings opens a dedicated pairing panel. An existing device creates a signed ten-minute invitation; a joining device creates a signed request; the existing device issues the encrypted grant; and both surfaces display the same comparison code. Device labels and pending pairing state persist locally.
+- **Authorized-device lifecycle:** the panel lists trusted devices and can block another device locally. The current device cannot block itself. The UI explicitly warns that local blocking does not rotate the shared profile key or provide complete cryptographic revocation.
+- **Manual encrypted updates:** a paired device can generate a signed AES-GCM envelope containing only its local operation history and copy it directly to another device. This is an explicit test path, not automatic transport.
+- **Transactional remote application:** receipt verifies the profile ID, unblocked authorized signer, signature, AES-GCM authentication, monotonic sequence, immutable operation IDs, signer/counter identity, supported store/action, entity/value consistency, and device-local metadata exclusion. Fresh operations, materialized conflict winners, the Lamport clock, and the replay cursor commit atomically. Duplicate immutable operations are idempotent; changed duplicates and replayed envelopes are rejected.
+- **Deletion behavior:** normal winning delete operations remove their materialized record transactionally. Permanent erasure remains local until encrypted content-free tombstones and key rotation are designed.
+- **Checks actually run:** syntax checks for the changed sync/storage/application files and all 78 automated tests passed. A local browser loaded v2.7.0 over the existing profile, retained all 8 messages and 3 attachments, created an invitation with a verification code, copied generated text, created an encrypted update, rejected malformed pasted text, closed through both Escape and Done, retained data after reload, and logged no warnings or errors.
+- **Remaining risks:** blocking lacks key rotation; pairing text has no QR representation; operation envelopes currently send the complete local device history; attachment bytes do not transfer; permanent erasure does not propagate; compaction and backend retention/access policy are unresolved.
+- **Next recommended step:** implement attachment chunk encryption/integrity, profile-key rotation and revocation, content-free permanent-erasure markers, bounded operation compaction, and full offline/reconnect integration tests before selecting or enabling a backend.
 
 ## SC-20 security foundation — 2026-11-18
 
@@ -70,13 +81,13 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Architecture and privacy boundary
 
-- `selfchat-unified-v1` remains the only active data source. Source v2.6.0 retains IndexedDB schema version 2 and adds security metadata without replacing or clearing existing records.
+- `selfchat-unified-v1` remains the only active data source. Source v2.7.0 retains IndexedDB schema version 2 and adds pairing/replay metadata without replacing or clearing existing records.
 - Device ID, profile key, and private device credentials remain browser-local metadata, not an account. Lamport order is deterministic but does not claim wall-clock chronology.
 - Operation payloads remain local plaintext inside the existing browser privacy boundary and can be transformed into signed encrypted envelopes for future transport. Attachment operations contain references and metadata, while blob bytes stay in `attachments`.
 - The installed app uses the same browser profile and origin data. It does not copy, upload, or synchronize message content.
 - `service-worker-core.js` owns the small testable cache-policy decisions. `service-worker.js` owns browser service-worker lifecycle and fetching.
 - Failed responses and cross-origin responses are not added to the offline cache. Navigation failures fall back to the cached app shell.
-- Before network synchronization, add pairing UX/key verification, key recovery, backend retention and access boundaries, remote validation/application, attachment transfer/integrity, compaction, and cross-device deletion semantics.
+- Before network synchronization, add key recovery/rotation, backend retention and access boundaries, attachment transfer/integrity, compaction, cross-device permanent-erasure semantics, and offline/reconnect integration coverage.
 
 ## Verification baseline
 
@@ -110,4 +121,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.4.0 release history remains complete and is superseded in production by v2.5.0.
 - v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- Continue SC-20 with pairing/authorized-device lifecycle and remote-envelope application; do not enable transport before the remaining safeguards and integration tests exist.
+- v2.7.0 pairing/remote-application implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- Continue SC-20 with attachment transfer, key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
