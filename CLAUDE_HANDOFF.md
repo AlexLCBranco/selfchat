@@ -5,26 +5,26 @@ This file is the persistent implementation-continuity record shared across Codex
 ## Current state
 
 - The current visible source version is **v2.4.0**.
-- v2.4.0 is deployed at `https://selfchat-home.vercel.app` (deployment `dpl_EREJxjhSToG8EG9YpnHXRTq3A59w`). Deployment protection remains enabled.
+- v2.4.0 is deployed at `https://selfchat-home.vercel.app` (deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu`). Deployment protection remains enabled.
 - v2.4.0 is the first shared implementation milestone for approved SC-21 and SC-22: it adds an in-app browser install entry point, offline-readiness feedback, explicit manifest identity/scope, and a guarded same-origin offline cache policy.
 - SC-20, SC-21, and SC-22 remain **Approved**, not Implemented. SC-20 synchronization has not started. Windows-specific support/packaging and the mobile interaction model have not started.
-- `FEATURE_BACKLOG.md` had pre-existing uncommitted approval entries for SC-20 through SC-22. Preserve them.
+- `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
 
 ## Delivery state
 
 - **Implemented:** v2.4.0 exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 59 automated tests, and the browser parity pass described below passed on 2026-11-18.
-- **Committed:** pending the approved release commit.
-- **Pushed:** pending the approved push to `origin/main`.
-- **Deployed:** v2.4.0 is recorded as deployed at the production URL and deployment identifier above. Deployment remains an explicit-approval action for future changes.
+- **Committed:** yes. Release commit `4b373c1` contains the v2.4.0 implementation, tests, backlog, and continuity rules.
+- **Pushed:** yes. `4b373c1` is on `origin/main`.
+- **Deployed:** yes. Deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY and aliased to the production URL above. Deployment remains an explicit-approval action for future changes.
 
 ## Latest continuity update — 2026-11-18
 
 - **Implemented:** repository guidance now makes `FEATURE_BACKLOG.md` and this handoff the durable cross-session records for development status and implementation continuity. `AGENTS.md`, `README.md`, and `DECISIONS.md` describe the same hierarchy and approval boundaries.
 - **Tested:** `git diff --check`, all repository-required syntax checks, all 59 automated tests, and the v2.4.0 browser parity pass passed.
-- **Committed:** pending the approved release commit.
-- **Pushed:** pending the approved push.
-- **Deployed:** the existing production deployment is unchanged until the approved release deployment completes.
+- **Committed:** yes; release commit `4b373c1`.
+- **Pushed:** yes; `origin/main` includes `4b373c1`.
+- **Deployed:** yes; production deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY at the stable URL.
 - **Blockers:** none for the continuity workflow.
 - **Next step:** use these records in every future implementation, and obtain explicit approval before any commit, push, or deployment.
 
@@ -63,5 +63,5 @@ The user explicitly approved commit, push, and production deployment on 2026-11-
 ## Current blockers and next steps
 
 - No blocker is recorded for maintaining project context.
-- Complete the approved v2.4.0 commit, push, and production deployment, then record their identifiers here.
+- v2.4.0 release, push, deployment, and protected-production verification are complete.
 - Continue SC-21 and SC-22 only through separately approved scoped work; design SC-20 before implementation as described above.
