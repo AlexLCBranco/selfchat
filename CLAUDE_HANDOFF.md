@@ -14,10 +14,10 @@ This file is the persistent implementation-continuity record shared across Codex
 
 - **Implemented:** v2.10.0 SC-20 permanent-erasure propagation foundation exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 88 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** no; pending final verification.
-- **Pushed:** no; pending commit.
-- **Deployed:** no. Production still serves v2.9.0.
-- **Production verified:** no for v2.10.0; pending deployment.
+- **Committed:** yes. Implementation commit `0324caccd56cc59f0b84094a21a8e4e393b54d18` contains the v2.10.0 source, tests, decisions, backlog, and initial handoff report.
+- **Pushed:** yes. `origin/main` was verified at full commit `0324caccd56cc59f0b84094a21a8e4e393b54d18`.
+- **Deployed:** no. Production still serves v2.9.0. The deployment command was not run because the approval reviewer requires separate explicit user approval for this security/privacy-boundary release.
+- **Production verified:** no for v2.10.0; pending explicit deployment approval and deployment.
 
 ## SC-20 permanent-erasure propagation — 2026-11-18
 
@@ -27,6 +27,7 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Resurrection prevention:** retained markers filter older operation envelopes and attachment packages, local commits, backup imports, point-in-time recovery, reload, and state replacement. Erasure updates are idempotent and use a replay cursor independent from ordinary encrypted updates.
 - **Manual boundary:** erasure packages still move only by explicit copy/paste. Automatic transport, endpoint configuration, accounts, and cloud persistence remain disabled.
 - **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 88 automated tests and `git diff --check` passed. The local browser loaded v2.10.0 with its existing 2 messages and attachments, showed the erasure-update control and the correct no-marker state, closed the pairing dialog with Escape, retained data through reload, and showed no application console errors. Chrome emitted only its expected custom-install-prompt diagnostic.
+- **GitHub delivery:** implementation commit `0324caccd56cc59f0b84094a21a8e4e393b54d18` was pushed and verified on `origin/main`. Production deployment is intentionally pending separate explicit approval because this release changes the security/privacy boundary.
 - **Remaining risks:** operation and marker histories are unbounded; transport is manual; offline/reconnect behavior is not integration-tested; backend retention/access policy is unresolved. Stable IDs remain intentionally retained as content-free anti-resurrection markers until a future bounded-retention rule exists.
 - **Next recommended step:** implement bounded operation and erasure-marker compaction/retention, then offline/reconnect integration tests before selecting a backend.
 
@@ -158,5 +159,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.8.0 encrypted attachment-package implementation, verification, commit/push, deployment, and production verification are complete.
 - v2.9.0 key-rotation/revocation implementation, verification, commit/push, deployment, and production verification are complete.
-- v2.10.0 permanent-erasure propagation is implemented and locally verified; commit, push, deployment, and production verification are pending.
+- v2.10.0 permanent-erasure propagation is implemented, locally verified, committed, and pushed. Deployment and production verification require separate explicit approval for this security/privacy-boundary release.
 - Continue SC-20 with bounded compaction/retention and integration tests; do not enable transport before those safeguards exist.
