@@ -324,3 +324,11 @@ Device revocation advances the existing sync profile to a strictly monotonic key
 Operation envelopes and attachment bundles authenticate the profile-key epoch and are rejected when they use an older or different epoch. Enrollment grants carry the current epoch so a newly paired device joins the active key generation. Rotation metadata and durable revocation state persist locally without rewriting chats, messages, attachments, Trash, snapshots, or operation history. Distribution remains an explicit copy/paste action; automatic transport and backend infrastructure remain disabled.
 
 Reason: local blocking did not remove a device's knowledge of the shared key. Per-device wrapping of a replacement key creates actual forward revocation while retaining the existing direct-transfer privacy boundary and non-destructive local storage model.
+
+## 2026-11-18 — SC-20 content-free permanent-erasure propagation
+
+Permanent deletion retains a minimal anti-resurrection marker containing only a stable entity ID, entity type, and erasure time. These markers are encrypted inside a signed current-epoch erasure envelope with a replay sequence independent from ordinary operation envelopes. Receivers require an authorized unblocked signer, validate a strict marker-only schema, and purge matching live records, Trash, drafts, snapshots, attachments, legacy copies, and operation history before advancing the erasure replay cursor.
+
+Retained markers filter later imports, recovery restores, local commits, state replacements, ordinary encrypted updates, and attachment packages so older data cannot recreate an erased record. Related message and attachment IDs discovered during purge also receive markers. Version 2.10.0 keeps manual copy/paste transport and the existing IndexedDB schema; it adds no endpoint, account, automatic transport, or cloud persistence.
+
+Reason: a normal synchronized delete can lose to older or delayed state, while permanent erasure must remain irreversible across authorized devices without sending message content or weakening the browser-local privacy boundary.

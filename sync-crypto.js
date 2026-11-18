@@ -481,6 +481,52 @@
     return { header, operations: payload.operations };
   }
 
+  async function createErasureEnvelope(markers, credentials, profile, {
+    sequence,
+    createdAt = new Date().toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    if (!Array.isArray(markers) || !markers.length) throw new Error("At least one erasure marker is required");
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("A positive erasure sequence is required");
+    const api = cryptoApi(cryptoOverride);
+    const header = {
+      version: ENVELOPE_VERSION,
+      type: "selfchat-erasure-envelope",
+      profileId: profile.id,
+      keyEpoch: profile.keyEpoch,
+      deviceId: credentials.deviceId,
+      sequence,
+      createdAt,
+      markerCount: markers.length
+    };
+    const iv = randomBytes(12, api);
+    const key = await importProfileKey(profile.keyMaterial, "encrypt", api);
+    const ciphertext = await api.subtle.encrypt({ name: "AES-GCM", iv, additionalData: bytes(stableStringify(header)) }, key, bytes(stableStringify({ markers })));
+    const signed = { header, iv: base64UrlEncode(iv), ciphertext: base64UrlEncode(ciphertext) };
+    return { ...signed, signature: await sign(signed, credentials.signing.privateJwk, api) };
+  }
+
+  async function openErasureEnvelope(envelope, profile, authorizedDevice, {
+    minimumSequence = 0,
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    const { signature, ...signed } = envelope || {};
+    const header = signed.header || {};
+    if (header.version !== ENVELOPE_VERSION || header.type !== "selfchat-erasure-envelope") throw new Error("Unsupported erasure envelope");
+    if (header.profileId !== profile.id) throw new Error("Erasure envelope belongs to another sync profile");
+    if (header.keyEpoch !== profile.keyEpoch) throw new Error("Erasure envelope uses an unavailable key epoch");
+    if (header.deviceId !== authorizedDevice.deviceId) throw new Error("Erasure envelope device is not authorized");
+    if (!Number.isSafeInteger(header.sequence) || header.sequence <= minimumSequence) throw new Error("Erasure envelope is stale or replayed");
+    if (!Number.isSafeInteger(header.markerCount) || header.markerCount < 1 || header.markerCount > 10000) throw new Error("Erasure envelope marker count is invalid");
+    if (!(await verify(signed, signature, authorizedDevice.signingPublicJwk, api))) throw new Error("Erasure envelope signature is invalid");
+    const key = await importProfileKey(profile.keyMaterial, "decrypt", api);
+    const plaintext = await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(signed.iv), additionalData: bytes(stableStringify(header)) }, key, base64UrlDecode(signed.ciphertext));
+    const payload = JSON.parse(decoder.decode(plaintext));
+    if (!Array.isArray(payload.markers) || payload.markers.length !== header.markerCount) throw new Error("Erasure envelope contents do not match its authenticated header");
+    return { header, markers: payload.markers };
+  }
+
   return {
     ENVELOPE_VERSION,
     ATTACHMENT_BUNDLE_VERSION,
@@ -503,6 +549,8 @@
     createEncryptedAttachmentBundle,
     openEncryptedAttachmentBundle,
     createOperationEnvelope,
-    openOperationEnvelope
+    openOperationEnvelope,
+    createErasureEnvelope,
+    openErasureEnvelope
   };
 });

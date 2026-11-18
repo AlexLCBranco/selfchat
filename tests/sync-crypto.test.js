@@ -79,6 +79,19 @@ test("operation envelopes encrypt content, authenticate headers, and reject repl
   );
 });
 
+test("erasure envelopes expose no stable IDs, authenticate markers, and reject replay", async () => {
+  const credentials = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
+  const profile = { id: "profile-1", keyEpoch: 3, keyMaterial: syncCrypto.generateProfileKey(webcrypto) };
+  const markers = [{ entityType: "message", entityId: "private-message-id", erasedAt: "2026-11-18T12:00:00.000Z" }];
+  const envelope = await syncCrypto.createErasureEnvelope(markers, credentials, profile, { sequence: 1, crypto: webcrypto });
+  assert.equal(JSON.stringify(envelope).includes("private-message-id"), false);
+  assert.equal(envelope.header.markerCount, 1);
+  const device = { deviceId: credentials.deviceId, signingPublicJwk: credentials.signing.publicJwk };
+  assert.deepEqual((await syncCrypto.openErasureEnvelope(envelope, profile, device, { crypto: webcrypto })).markers, markers);
+  await assert.rejects(syncCrypto.openErasureEnvelope(envelope, profile, device, { minimumSequence: 1, crypto: webcrypto }), /stale or replayed/);
+  await assert.rejects(syncCrypto.openErasureEnvelope({ ...envelope, header: { ...envelope.header, markerCount: 2 } }, profile, device, { crypto: webcrypto }), /signature is invalid/);
+});
+
 test("pairing invitations are signed, short-lived, and have a stable comparison code", async () => {
   const credentials = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
   const invitation = await syncCrypto.createPairingInvitation(credentials, { id: "profile-1" }, {

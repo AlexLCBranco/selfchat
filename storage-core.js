@@ -355,6 +355,36 @@
     return normalizeState(state, fallback);
   }
 
+  function validateErasureMarkers(value) {
+    if (!Array.isArray(value)) throw new Error("Erasure markers must be an array");
+    const allowedTypes = new Set(["chat", "message", "attachment"]);
+    const byKey = new Map();
+    value.forEach(marker => {
+      const keys = marker && typeof marker === "object" ? Object.keys(marker).sort() : [];
+      if (keys.join(",") !== "entityId,entityType,erasedAt") throw new Error("Erasure marker contains unsupported data");
+      if (!allowedTypes.has(marker.entityType) || typeof marker.entityId !== "string" || !marker.entityId || marker.entityId.length > 200) throw new Error("Erasure marker is invalid");
+      if (!Number.isFinite(Date.parse(marker.erasedAt))) throw new Error("Erasure marker timestamp is invalid");
+      const key = `${marker.entityType}:${marker.entityId}`;
+      const current = byKey.get(key);
+      if (!current || marker.erasedAt < current.erasedAt) byKey.set(key, clone(marker));
+    });
+    return [...byKey.values()].sort((a, b) => `${a.entityType}:${a.entityId}`.localeCompare(`${b.entityType}:${b.entityId}`));
+  }
+
+  function erasureTargets(markers) {
+    const entityIds = new Set();
+    const chatIds = new Set();
+    const messageIds = new Set();
+    const imageIds = new Set();
+    validateErasureMarkers(markers || []).forEach(marker => {
+      entityIds.add(marker.entityId);
+      if (marker.entityType === "chat") chatIds.add(marker.entityId);
+      if (marker.entityType === "message") messageIds.add(marker.entityId);
+      if (marker.entityType === "attachment") imageIds.add(marker.entityId);
+    });
+    return { entityIds, chatIds, messageIds, imageIds };
+  }
+
   function recoverableAttachmentRecords(requiredIds, currentRecords, backupRecords) {
     const required = new Set(requiredIds || []);
     const usable = new Set((currentRecords || []).filter(record => record?.id && record.blob?.size > 0).map(record => record.id));
@@ -424,7 +454,7 @@
 
   return {
     UNSORTED_CHAT, normalizeState, mergeStates, migrationOperations, replayOperations, validateState,
-    referencedAttachmentIds, redactState, recoverableAttachmentRecords, messageVersionTime,
+    referencedAttachmentIds, redactState, validateErasureMarkers, erasureTargets, recoverableAttachmentRecords, messageVersionTime,
     stateCounts, backupPayload, parseBackup, newestSnapshotPerDay, syncOperationsForDiff,
     compareSyncOperations, mergeSyncOperations, resolveSyncConflicts, bootstrapSyncDiff,
     REMOTE_SYNC_STORES, validateRemoteSyncOperations

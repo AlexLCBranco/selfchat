@@ -88,11 +88,11 @@
     const names = ["chats", "messages", "stickers", "drafts", "trash", "meta"];
     const transaction = db.transaction(names, "readonly");
     const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
-    const [chats, messages, stickers, drafts, trash, active] = await Promise.all([
+    const [chats, messages, stickers, drafts, trash, active, erasureRecord] = await Promise.all([
       requestResult(stores.chats.getAll()), requestResult(stores.messages.getAll()), requestResult(stores.stickers.getAll()),
-      requestResult(stores.drafts.getAll()), requestResult(stores.trash.getAll()), requestResult(stores.meta.get("activeChatId"))
+      requestResult(stores.drafts.getAll()), requestResult(stores.trash.getAll()), requestResult(stores.meta.get("activeChatId")), requestResult(stores.meta.get("erasureMarkers"))
     ]);
-    return core.normalizeState({
+    const loaded = core.normalizeState({
       activeChatId: active?.value,
       chats,
       messages,
@@ -102,6 +102,7 @@
       deletedChatIds: trash.filter(item => item.entityType === "chat").map(item => item.entityId),
       deletedMessageIds: trash.filter(item => item.entityType === "message").map(item => item.entityId)
     }, fallback);
+    return core.redactState(loaded, core.erasureTargets(erasureRecord?.value || []), fallback);
   }
 
   async function readV092Projection(fallback) {
@@ -203,6 +204,42 @@
     (diff.metaPut || []).forEach(record => stores.meta.put(record));
     (diff.metaDelete || []).forEach(key => stores.meta.delete(key));
     if (diff.activeChatId) stores.meta.put({ key: "activeChatId", value: diff.activeChatId });
+  }
+
+  function operationSurvivesErasure(operation, targets) {
+    if (targets.entityIds.has(operation.entityId) || targets.imageIds.has(operation.entityId)) return false;
+    if (operation.store === "drafts" && targets.chatIds.has(operation.entityId)) return false;
+    const value = operation.value || {};
+    if (operation.store === "messages" && targets.chatIds.has(value.chatId)) return false;
+    if (operation.store === "trash") {
+      const payload = value.payload || {};
+      if (targets.entityIds.has(value.entityId) || targets.chatIds.has(payload.originalChatId) || targets.chatIds.has(payload.message?.chatId)) return false;
+    }
+    return true;
+  }
+
+  function filterDiffForErasure(diff, markers) {
+    const targets = core.erasureTargets(markers || []);
+    return {
+      ...diff,
+      chatsPut: (diff.chatsPut || []).filter(record => !targets.chatIds.has(record.id)),
+      messagesPut: (diff.messagesPut || []).filter(record => !targets.messageIds.has(record.id) && !targets.chatIds.has(record.chatId)),
+      draftsPut: (diff.draftsPut || []).filter(record => !targets.chatIds.has(record.chatId)),
+      trashPut: (diff.trashPut || []).filter(record => operationSurvivesErasure({ store: "trash", entityId: record.id, value: record }, targets)),
+      attachmentsPut: (diff.attachmentsPut || []).filter(record => !targets.imageIds.has(record.id))
+    };
+  }
+
+  function mergeErasureMarkers(current, incoming) {
+    return core.validateErasureMarkers([...(current || []), ...(incoming || [])]);
+  }
+
+  function markersForTargets(targets, erasedAt = new Date().toISOString()) {
+    return core.validateErasureMarkers([
+      ...[...targets.chatIds].map(entityId => ({ entityType: "chat", entityId, erasedAt })),
+      ...[...targets.messageIds].map(entityId => ({ entityType: "message", entityId, erasedAt })),
+      ...[...targets.imageIds].map(entityId => ({ entityType: "attachment", entityId, erasedAt }))
+    ]);
   }
 
   function createDeviceId(adapters) {
@@ -309,6 +346,30 @@
       const available = name => db.objectStoreNames.contains(name);
       let backups = [];
       if (available("legacyBackups")) backups = await requestResult(db.transaction("legacyBackups", "readonly").objectStore("legacyBackups").getAll());
+      if (available("messages")) {
+        const messages = await requestResult(db.transaction("messages", "readonly").objectStore("messages").getAll());
+        messages.forEach(message => {
+          if (!targets.chatIds.has(message.chatId) && !targets.messageIds.has(message.id)) return;
+          targets.messageIds.add(message.id); targets.entityIds.add(message.id);
+          if (message.imageId) targets.imageIds.add(message.imageId);
+          if (message.attachmentId) targets.imageIds.add(message.attachmentId);
+        });
+      }
+      for (const backup of backups) {
+        const states = [];
+        for (const field of ["primary", "recovery"]) {
+          try { states.push(JSON.parse(backup.storage?.[field])); } catch (_) {}
+        }
+        states.push(...(backup.recoverySnapshots || []).map(snapshot => snapshot.state));
+        states.filter(Boolean).forEach(state => {
+          (state.messages || []).forEach(message => {
+            if (!targets.chatIds.has(message.chatId) && !targets.messageIds.has(message.id)) return;
+            targets.messageIds.add(message.id); targets.entityIds.add(message.id);
+            if (message.imageId) targets.imageIds.add(message.imageId);
+            if (message.attachmentId) targets.imageIds.add(message.attachmentId);
+          });
+        });
+      }
       const names = ["operations", "chats", "messages", "drafts", "attachmentRefs", "trash", "legacyBackups"].filter(available);
       if (!names.length) return;
       const transaction = db.transaction(names, "readwrite");
@@ -397,10 +458,12 @@
         minimumSequence: Number(cursors[device.deviceId]) || 0
       });
       const incoming = core.validateRemoteSyncOperations(opened.operations, device.deviceId);
+      const erasureTargets = core.erasureTargets(metadata.erasureMarkers || []);
+      const applicable = incoming.filter(operation => operationSurvivesErasure(operation, erasureTargets));
       let attachmentRecords = [];
       if (attachmentBundles) {
         if (!Array.isArray(attachmentBundles)) throw new Error("Encrypted sync package attachments are invalid");
-        const attachmentReferences = core.resolveSyncConflicts(incoming)
+        const attachmentReferences = core.resolveSyncConflicts(applicable)
           .filter(operation => operation.store === "attachments" && operation.action === "put");
         const referencesById = new Map(attachmentReferences.map(operation => [operation.entityId, operation]));
         const bundleIds = new Set();
@@ -409,19 +472,22 @@
           if (!attachmentId || bundleIds.has(attachmentId)) throw new Error("Encrypted sync package contains duplicate attachment bundles");
           bundleIds.add(attachmentId);
           const reference = referencesById.get(attachmentId);
-          if (!reference) throw new Error("Encrypted sync package contains an attachment without an encrypted reference");
+          if (!reference) {
+            if (erasureTargets.imageIds.has(attachmentId)) continue;
+            throw new Error("Encrypted sync package contains an attachment without an encrypted reference");
+          }
           attachmentRecords.push({
             operationId: reference.id,
             record: await syncCrypto.openEncryptedAttachmentBundle(bundle, metadata.syncProfile, device, reference.value)
           });
         }
-        if (bundleIds.size !== referencesById.size || [...referencesById.keys()].some(id => !bundleIds.has(id))) {
+        if ([...referencesById.keys()].some(id => !bundleIds.has(id))) {
           throw new Error("Encrypted sync package is missing attachment bytes");
         }
       }
       const existing = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
       const existingById = new Map(existing.map(operation => [operation.id, operation]));
-      const fresh = incoming.filter(operation => {
+      const fresh = applicable.filter(operation => {
         const known = existingById.get(operation.id);
         if (known && syncCrypto.stableStringify(known) !== syncCrypto.stableStringify(operation)) {
           throw new Error("Encrypted update changes an existing immutable operation");
@@ -462,6 +528,7 @@
       async load() { return loadState(db, adapters.defaultState); },
       async commit(diff, { significant = true, snapshotState = null } = {}) {
         return runSerialized(async () => {
+          diff = filterDiffForErasure(diff, metadata.erasureMarkers);
           const today = new Date().toISOString().slice(0, 10);
           const createDailySnapshot = significant && snapshotState && metadata.lastSnapshotDay !== today;
           const sync = core.syncOperationsForDiff(diff, {
@@ -487,7 +554,7 @@
         });
       },
       async replaceState(value) {
-        const next = core.normalizeState(value, adapters.defaultState);
+        const next = core.redactState(value, core.erasureTargets(metadata.erasureMarkers || []), adapters.defaultState);
         const current = await loadState(db, adapters.defaultState);
         const removed = (before, after, key = "id") => {
           const nextIds = new Set(after.map(record => record[key]));
@@ -518,6 +585,7 @@
         if (sync.operations.length) stores.meta.put({ key: "logicalClock", value: sync.counter, updatedAt: new Date().toISOString() });
         await transactionDone(transaction);
         if (sync.operations.length) metadata.logicalClock = sync.counter;
+        return next;
       },
       async getAttachment(id) { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").get(id)); },
       async getAllAttachments() { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").getAll()); },
@@ -689,6 +757,16 @@
           return envelope;
         });
       },
+      async createErasureUpdate() {
+        return runSerialized(async () => {
+          const markers = core.validateErasureMarkers(metadata.erasureMarkers || []);
+          if (!markers.length) throw new Error("This device has no permanent erasures to share");
+          const sequence = (Number.isSafeInteger(metadata.outboundErasureSequence) ? metadata.outboundErasureSequence : 0) + 1;
+          const envelope = await syncCrypto.createErasureEnvelope(markers, metadata.deviceCredentials, metadata.syncProfile, { sequence });
+          await persistSecurityMetadata({ outboundErasureSequence: sequence });
+          return envelope;
+        });
+      },
       async createEncryptedPackage() {
         return runSerialized(async () => {
           const operations = (await repository.listOperations()).filter(operation => operation.deviceId === metadata.deviceIdentity.id);
@@ -724,6 +802,20 @@
           return legacyResult;
         });
       },
+      async applyErasureEnvelope(envelope) {
+        return runSerialized(async () => {
+          const device = (metadata.authorizedDevices || []).find(item => item.deviceId === envelope?.header?.deviceId && !item.blockedAt && !item.revokedAt);
+          if (!device) throw new Error("Erasure update is not from an authorized device");
+          const cursors = { ...(metadata.erasureReplayCursors || {}) };
+          const opened = await syncCrypto.openErasureEnvelope(envelope, metadata.syncProfile, device, { minimumSequence: Number(cursors[device.deviceId]) || 0 });
+          const incoming = core.validateErasureMarkers(opened.markers);
+          const markers = mergeErasureMarkers(metadata.erasureMarkers, incoming);
+          const targets = core.erasureTargets(markers);
+          cursors[device.deviceId] = opened.header.sequence;
+          await repository.purgeEveryCopy(targets, await loadState(db, adapters.defaultState), { markers, erasureReplayCursors: cursors });
+          return { received: incoming.length, retained: metadata.erasureMarkers.length, deviceId: device.deviceId, sequence: opened.header.sequence };
+        });
+      },
       async applyEncryptedPackage(syncPackage) {
         return runSerialized(async () => {
           if (syncPackage?.version !== 1 || syncPackage?.type !== "selfchat-encrypted-sync-package") throw new Error("Unsupported encrypted sync package");
@@ -743,8 +835,44 @@
         await transactionDone(transaction);
         metadata[key] = value;
       },
-      async purgeEveryCopy(targets, currentState) {
+      redactErasedState(value) { return core.redactState(value, core.erasureTargets(metadata.erasureMarkers || []), adapters.defaultState); },
+      async purgeEveryCopy(targets, currentState, options = {}) {
         const snapshots = await repository.listSnapshots();
+        const operations = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
+        const collect = value => {
+          (value?.chats || []).forEach(chat => { if (targets.chatIds.has(chat.id) && chat.avatarImageId) targets.imageIds.add(chat.avatarImageId); });
+          (value?.messages || []).forEach(message => {
+            if (targets.chatIds.has(message.chatId) || targets.messageIds.has(message.id)) {
+              targets.messageIds.add(message.id); targets.entityIds.add(message.id);
+              if (message.imageId) targets.imageIds.add(message.imageId);
+              if (message.attachmentId) targets.imageIds.add(message.attachmentId);
+            }
+          });
+          (value?.trash || []).forEach(item => {
+            const payload = item.payload || {};
+            if (targets.chatIds.has(item.entityId) || targets.messageIds.has(item.entityId) || targets.chatIds.has(payload.originalChatId) || targets.chatIds.has(payload.message?.chatId)) {
+              targets.entityIds.add(item.entityId);
+              if (item.entityType === "message") targets.messageIds.add(item.entityId);
+              if (payload.chat?.avatarImageId) targets.imageIds.add(payload.chat.avatarImageId);
+              [payload.message, ...(payload.messages || [])].filter(Boolean).forEach(message => {
+                targets.messageIds.add(message.id); targets.entityIds.add(message.id);
+                if (message.imageId) targets.imageIds.add(message.imageId);
+                if (message.attachmentId) targets.imageIds.add(message.attachmentId);
+              });
+            }
+          });
+        };
+        collect(currentState);
+        snapshots.forEach(snapshot => collect(snapshot.state));
+        operations.forEach(operation => {
+          if (operation.store === "messages" && operation.value && (targets.chatIds.has(operation.value.chatId) || targets.messageIds.has(operation.entityId))) {
+            targets.messageIds.add(operation.entityId); targets.entityIds.add(operation.entityId);
+            if (operation.value.imageId) targets.imageIds.add(operation.value.imageId);
+            if (operation.value.attachmentId) targets.imageIds.add(operation.value.attachmentId);
+          }
+          if (operation.store === "chats" && targets.chatIds.has(operation.entityId) && operation.value?.avatarImageId) targets.imageIds.add(operation.value.avatarImageId);
+          if (operation.store === "trash" && operation.value) collect({ trash: [operation.value] });
+        });
         snapshots.forEach(snapshot => {
           (snapshot.state?.chats || []).forEach(chat => {
             if (targets.chatIds.has(chat.id) && chat.avatarImageId) targets.imageIds.add(chat.avatarImageId);
@@ -757,8 +885,10 @@
           const nextState = core.redactState(snapshot.state, targets, adapters.defaultState);
           return { ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length };
         });
-        const referenced = core.referencedAttachmentIds(currentState, redactedSnapshots.map(snapshot => snapshot.state));
-        const names = ["chats", "messages", "drafts", "trash", "snapshots", "attachments", "operations"];
+        const redactedCurrent = core.redactState(currentState, targets, adapters.defaultState);
+        const referenced = core.referencedAttachmentIds(redactedCurrent, redactedSnapshots.map(snapshot => snapshot.state));
+        const retainedMarkers = mergeErasureMarkers(metadata.erasureMarkers, [...(options.markers || []), ...markersForTargets(targets)]);
+        const names = ["chats", "messages", "drafts", "trash", "snapshots", "attachments", "operations", "meta"];
         const transaction = db.transaction(names, "readwrite");
         const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
         targets.chatIds.forEach(id => { stores.chats.delete(id); stores.drafts.delete(id); });
@@ -778,7 +908,11 @@
           if (targets.entityIds.has(operation.entityId) || targets.imageIds.has(operation.entityId)) cursor.delete();
           cursor.continue();
         };
+        stores.meta.put({ key: "erasureMarkers", value: retainedMarkers, updatedAt: new Date().toISOString() });
+        if (options.erasureReplayCursors) stores.meta.put({ key: "erasureReplayCursors", value: options.erasureReplayCursors, updatedAt: new Date().toISOString() });
         await transactionDone(transaction);
+        metadata.erasureMarkers = retainedMarkers;
+        if (options.erasureReplayCursors) metadata.erasureReplayCursors = options.erasureReplayCursors;
         await purgeLegacyDatabase(targets, adapters.defaultState);
       },
       close() { db.close(); }

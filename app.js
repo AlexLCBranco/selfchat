@@ -3297,6 +3297,15 @@ $("#createEncryptedUpdateButton").addEventListener("click", async () => {
     elements.pairingResult.textContent = error.message;
   }
 });
+$("#createErasureUpdateButton").addEventListener("click", async () => {
+  try {
+    const envelope = await repository.createErasureUpdate();
+    showPairingOutput("Encrypted erasure update ready", envelope);
+    elements.pairingResult.textContent = "Paste this on every authorized device. It contains only encrypted stable IDs, types, and erasure times—never message content.";
+  } catch (error) {
+    elements.pairingResult.textContent = error.message;
+  }
+});
 $("#downloadEncryptedPackageButton").addEventListener("click", async event => {
   const button = event.currentTarget;
   button.disabled = true;
@@ -3371,6 +3380,10 @@ $("#processPairingInputButton").addEventListener("click", async () => {
       const result = await repository.applyRemoteEnvelope(payload);
       await reloadRemoteState();
       elements.pairingResult.textContent = `Applied ${result.applied} of ${result.received} authenticated operation${result.received === 1 ? "" : "s"}.`;
+    } else if (payload.header?.type === "selfchat-erasure-envelope") {
+      const result = await repository.applyErasureEnvelope(payload);
+      await reloadRemoteState();
+      elements.pairingResult.textContent = `Applied ${result.received} authenticated erasure marker${result.received === 1 ? "" : "s"}. Older updates cannot restore those records.`;
     } else {
       throw new Error("This is not recognized SelfChat pairing or encrypted update data");
     }
@@ -3528,10 +3541,9 @@ $("#confirmRecoveryButton").addEventListener("click", async () => {
   if (repository) await repository.commit({ activeChatId: state.activeChatId }, { significant: true, snapshotState: state }).catch(() => {});
   else await createRecoverySnapshot("Before restore", state, { force: true }).catch(() => {});
   try {
-    const target = normalizeState(snapshot.state);
+    const target = repository ? repository.redactErasedState(snapshot.state) : normalizeState(snapshot.state);
     if (repository) {
-      await repository.replaceState(target);
-      state = target;
+      state = await repository.replaceState(target);
       persistedState = structuredClone(state);
     } else {
       state = target;
@@ -3572,7 +3584,7 @@ elements.importInput.addEventListener("change", async () => {
   let importCommitted = false;
   try {
     const parsed = SelfChatStorageCore.parseBackup(JSON.parse(await file.text()), DEFAULT_STATE);
-    const imported = parsed.state;
+    const imported = repository ? repository.redactErasedState(parsed.state) : parsed.state;
     const imageCount = parsed.attachments.length;
     if (!await requestConfirmation({
       title: "Import this backup?",

@@ -1,6 +1,6 @@
 # SelfChat
 
-SelfChat v2.9.0 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v2.10.0 is a private, desktop-first message stream organized into multiple chats containing only you.
 
 It supports fast text entry, a derived chronological All Messages view with per-chat visibility controls, chat-specific notes, a two-chat desktop split view, pinned and manually ordered chats, titled/tagged/duplicated messages, direct message links, starred and permanently pinned messages, collapsible long messages, fenced code blocks with copy controls, media/link/file galleries, type and date-filtered search, keyboard chat switching, custom local-image chat avatars, replies with quoted context, images, stickers, generic file attachments, local search, File Explorer-style message selection and drag-to-move, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 

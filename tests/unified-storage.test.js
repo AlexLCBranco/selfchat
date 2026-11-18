@@ -438,6 +438,55 @@ test("authorized encrypted updates apply atomically and durable replay cursors r
   assert.equal((await repository.load()).chats.some(chat => chat.id === "blocked-chat"), false);
 });
 
+test("authenticated erasure updates purge every local copy and prevent old operations from resurrecting records", async () => {
+  repository = await storage.open(adapters({
+    createDeviceId: () => "local-device",
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "shared-profile", keyEpoch: 1, createdAt, algorithm: "AES-GCM-256", keyMaterial: syncCrypto.generateProfileKey(webcrypto) },
+      credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt, crypto: webcrypto })
+    })
+  }));
+  const remote = await syncCrypto.generateDeviceCredentials({ deviceId: "remote-device", crypto: webcrypto });
+  await repository.setMeta("authorizedDevices", [...repository.metadata.authorizedDevices, {
+    deviceId: remote.deviceId,
+    signingPublicJwk: remote.signing.publicJwk,
+    agreementPublicJwk: remote.agreement.publicJwk,
+    authorizedAt: new Date().toISOString(),
+    authorizedBy: "local-device"
+  }]);
+  const markers = [{ entityType: "message", entityId: "m2", erasedAt: "2026-11-18T12:00:00.000Z" }];
+  const erasure = await syncCrypto.createErasureEnvelope(markers, remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto });
+  assert.deepEqual(await repository.applyErasureEnvelope(erasure), { received: 1, retained: 2, deviceId: "remote-device", sequence: 1 });
+  assert.equal((await repository.load()).messages.some(message => message.id === "m2"), false);
+  assert.equal((await repository.listSnapshots()).some(snapshot => snapshot.state.messages.some(message => message.id === "m2")), false);
+  assert.equal(await repository.getAttachment("image-1"), undefined);
+  assert.equal(repository.metadata.erasureMarkers.some(marker => marker.entityType === "attachment" && marker.entityId === "image-1"), true);
+  await assert.rejects(repository.applyErasureEnvelope(erasure), /stale or replayed/);
+
+  const resurrection = { id: "remote-device:100", deviceId: "remote-device", counter: 100, store: "messages", entityType: "message", entityId: "m2", action: "put", recordedAt: new Date().toISOString(), value: fixture.messages.find(message => message.id === "m2") };
+  const oldUpdate = await syncCrypto.createOperationEnvelope([resurrection], remote, repository.metadata.syncProfile, { sequence: 1, crypto: webcrypto });
+  assert.deepEqual(await repository.applyRemoteEnvelope(oldUpdate), { received: 1, stored: 0, applied: 0, deviceId: "remote-device", sequence: 1 });
+  assert.equal((await repository.load()).messages.some(message => message.id === "m2"), false);
+  assert.equal(repository.redactErasedState(fixture).messages.some(message => message.id === "m2"), false);
+});
+
+test("chat erasure expands through operation-only child records and attachments", async () => {
+  repository = await storage.open(adapters());
+  const operationOnlyMessage = { id: "operation-only", chatId: "topic", type: "file", attachmentId: "operation-only-file", fileName: "old.txt", fileSize: 3, createdAt: "2026-11-01T09:00:00.000Z" };
+  await repository.commit({
+    messagesPut: [operationOnlyMessage],
+    attachmentsPut: [{ id: "operation-only-file", name: "old.txt", blob: new Blob(["old"]) }]
+  }, { significant: false });
+  const live = await repository.load();
+  await repository.commit({ messagesDelete: [operationOnlyMessage.id] }, { significant: false });
+  const targets = { entityIds: new Set(["topic"]), chatIds: new Set(["topic"]), messageIds: new Set(), imageIds: new Set() };
+  await repository.purgeEveryCopy(targets, core.redactState(live, targets, fallback));
+  assert.equal((await repository.listOperations()).some(operation => operation.entityId === operationOnlyMessage.id), false);
+  assert.equal(await repository.getAttachment("operation-only-file"), undefined);
+  assert.equal(repository.metadata.erasureMarkers.some(marker => marker.entityId === operationOnlyMessage.id), true);
+  assert.equal(repository.metadata.erasureMarkers.some(marker => marker.entityId === "operation-only-file"), true);
+});
+
 test("profile-key rotation durably revokes a device and can be accepted by a retained device", async () => {
   const authorizer = await syncCrypto.generateDeviceCredentials({ deviceId: "device-a", crypto: webcrypto });
   const retained = await syncCrypto.generateDeviceCredentials({ deviceId: "device-b", crypto: webcrypto });
