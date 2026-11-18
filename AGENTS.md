@@ -57,13 +57,13 @@ Before handing off a familiar WhatsApp-like interaction, perform a brief parity 
 
 ## Context maintenance
 
-- After every implementation, update `FEATURE_BACKLOG.md` with completed milestones and remaining work.
-- After every implementation, update `CLAUDE_HANDOFF.md` with implementation details, checks that actually ran, blockers, and next steps.
-- Update `DECISIONS.md` only for material product, architecture, privacy, storage, or deployment decisions.
+- After every implementation milestone, update `FEATURE_BACKLOG.md` with completed milestones and remaining work.
+- After every implementation milestone, update `CLAUDE_HANDOFF.md` with implementation results, checks that actually ran, blockers, and next steps.
+- Record material architectural decisions in `DECISIONS.md`; also update it for material product, privacy, storage, or deployment decisions.
 - Keep recorded decisions concise and include the reason.
 - If a new request contradicts an existing decision, flag the conflict and record the replacement after the user decides.
 - Keep temporary narration out of durable context, but preserve the implementation facts needed for another Codex or ChatGPT session to continue without manual transfer.
 
 ## External actions
 
-Git pushes, new remote repositories, production deployments, access changes, credentials, and destructive data operations require explicit user authorization. When the user approves a commit and push, include the updated backlog and handoff with the implementation. Never deploy without explicit approval. Local reversible implementation and testing do not require approval.
+Git pushes, new remote repositories, production deployments, access changes, credentials, and destructive data operations require explicit user authorization. When the user approves a commit and push, commit and push the approved implementation and its updated backlog, handoff, and applicable decisions to GitHub. Never claim GitHub is synchronized unless the push succeeds and the remote branch is verified at the pushed commit. Keep Git commits and pushes separate from production deployments: a push does not authorize or imply a deployment. Never deploy without explicit approval. Local reversible implementation and testing do not require approval.
