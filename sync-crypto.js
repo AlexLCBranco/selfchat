@@ -1,0 +1,260 @@
+(function (root, factory) {
+  const api = factory();
+  if (typeof module === "object" && module.exports) module.exports = api;
+  else root.SelfChatSyncCrypto = api;
+})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  "use strict";
+
+  const ENVELOPE_VERSION = 1;
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+
+  function cryptoApi(override) {
+    const value = override || globalThis.crypto;
+    if (!value?.subtle || !value?.getRandomValues) throw new Error("Web Crypto is required for encrypted synchronization");
+    return value;
+  }
+
+  function stableValue(value) {
+    if (Array.isArray(value)) return value.map(stableValue);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(Object.keys(value).sort().map(key => [key, stableValue(value[key])]));
+    }
+    return value;
+  }
+
+  function stableStringify(value) {
+    return JSON.stringify(stableValue(value));
+  }
+
+  function bytes(value) {
+    return typeof value === "string" ? encoder.encode(value) : new Uint8Array(value);
+  }
+
+  function base64UrlEncode(value) {
+    const input = bytes(value);
+    let binary = "";
+    input.forEach(byte => { binary += String.fromCharCode(byte); });
+    const encoded = typeof btoa === "function" ? btoa(binary) : Buffer.from(input).toString("base64");
+    return encoded.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function base64UrlDecode(value) {
+    if (typeof value !== "string" || !/^[A-Za-z0-9_-]*$/.test(value)) throw new Error("Invalid base64url value");
+    const padded = value.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((value.length + 3) % 4);
+    const binary = typeof atob === "function" ? atob(padded) : Buffer.from(padded, "base64").toString("binary");
+    return Uint8Array.from(binary, character => character.charCodeAt(0));
+  }
+
+  function randomBytes(length, cryptoOverride) {
+    const value = new Uint8Array(length);
+    cryptoApi(cryptoOverride).getRandomValues(value);
+    return value;
+  }
+
+  async function sha256(value, cryptoOverride) {
+    return new Uint8Array(await cryptoApi(cryptoOverride).subtle.digest("SHA-256", bytes(value)));
+  }
+
+  async function importSigningKey(jwk, usage, cryptoOverride) {
+    return cryptoApi(cryptoOverride).subtle.importKey("jwk", jwk, { name: "ECDSA", namedCurve: "P-256" }, false, [usage]);
+  }
+
+  async function importAgreementKey(jwk, usage, cryptoOverride) {
+    return cryptoApi(cryptoOverride).subtle.importKey("jwk", jwk, { name: "ECDH", namedCurve: "P-256" }, false, usage ? [usage] : []);
+  }
+
+  async function sign(value, privateJwk, cryptoOverride) {
+    const api = cryptoApi(cryptoOverride);
+    const key = await importSigningKey(privateJwk, "sign", api);
+    return base64UrlEncode(await api.subtle.sign({ name: "ECDSA", hash: "SHA-256" }, key, bytes(stableStringify(value))));
+  }
+
+  async function verify(value, signature, publicJwk, cryptoOverride) {
+    try {
+      const api = cryptoApi(cryptoOverride);
+      const key = await importSigningKey(publicJwk, "verify", api);
+      return api.subtle.verify({ name: "ECDSA", hash: "SHA-256" }, key, base64UrlDecode(signature), bytes(stableStringify(value)));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  async function generateDeviceCredentials({ deviceId, createdAt = new Date().toISOString(), crypto: cryptoOverride } = {}) {
+    if (typeof deviceId !== "string" || !deviceId) throw new Error("A device ID is required");
+    const api = cryptoApi(cryptoOverride);
+    const signing = await api.subtle.generateKey({ name: "ECDSA", namedCurve: "P-256" }, true, ["sign", "verify"]);
+    const agreement = await api.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+    return {
+      version: 1,
+      deviceId,
+      createdAt,
+      signing: {
+        publicJwk: await api.subtle.exportKey("jwk", signing.publicKey),
+        privateJwk: await api.subtle.exportKey("jwk", signing.privateKey)
+      },
+      agreement: {
+        publicJwk: await api.subtle.exportKey("jwk", agreement.publicKey),
+        privateJwk: await api.subtle.exportKey("jwk", agreement.privateKey)
+      }
+    };
+  }
+
+  function generateProfileKey(cryptoOverride) {
+    return base64UrlEncode(randomBytes(32, cryptoOverride));
+  }
+
+  async function createEnrollmentRequest(credentials, {
+    profileId,
+    nonce = base64UrlEncode(randomBytes(16)),
+    createdAt = new Date().toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    if (!profileId) throw new Error("A sync profile ID is required");
+    const request = {
+      version: 1,
+      type: "selfchat-enrollment-request",
+      profileId,
+      deviceId: credentials.deviceId,
+      nonce,
+      createdAt,
+      signingPublicJwk: credentials.signing.publicJwk,
+      agreementPublicJwk: credentials.agreement.publicJwk
+    };
+    return { ...request, proof: await sign(request, credentials.signing.privateJwk, cryptoOverride) };
+  }
+
+  async function verifyEnrollmentRequest(request, cryptoOverride) {
+    if (request?.version !== 1 || request?.type !== "selfchat-enrollment-request" || !request.deviceId || !request.profileId || !request.nonce) return false;
+    const { proof, ...body } = request;
+    return verify(body, proof, request.signingPublicJwk, cryptoOverride);
+  }
+
+  async function deriveEnrollmentKey(privateJwk, publicJwk, salt, info, cryptoOverride) {
+    const api = cryptoApi(cryptoOverride);
+    const privateKey = await importAgreementKey(privateJwk, "deriveBits", api);
+    const publicKey = await importAgreementKey(publicJwk, null, api);
+    const secret = await api.subtle.deriveBits({ name: "ECDH", public: publicKey }, privateKey, 256);
+    const hkdf = await api.subtle.importKey("raw", secret, "HKDF", false, ["deriveKey"]);
+    return api.subtle.deriveKey({ name: "HKDF", hash: "SHA-256", salt, info: bytes(info) }, hkdf, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+  }
+
+  async function issueEnrollmentGrant(request, authorizerCredentials, profile, {
+    createdAt = new Date().toISOString(),
+    expiresAt = new Date(Date.parse(createdAt) + 10 * 60 * 1000).toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    if (!(await verifyEnrollmentRequest(request, api))) throw new Error("Enrollment request proof is invalid");
+    if (!profile?.id || profile.id !== request.profileId || !profile.keyMaterial) throw new Error("Enrollment request targets another sync profile");
+    const ephemeral = await api.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"]);
+    const ephemeralPrivate = await api.subtle.exportKey("jwk", ephemeral.privateKey);
+    const ephemeralPublic = await api.subtle.exportKey("jwk", ephemeral.publicKey);
+    const salt = randomBytes(16, api);
+    const iv = randomBytes(12, api);
+    const info = `selfchat-enrollment:${request.profileId}:${request.nonce}`;
+    const wrappingKey = await deriveEnrollmentKey(ephemeralPrivate, request.agreementPublicJwk, salt, info, api);
+    const requestHash = base64UrlEncode(await sha256(stableStringify(request), api));
+    const wrappedProfileKey = await api.subtle.encrypt({ name: "AES-GCM", iv, additionalData: bytes(requestHash) }, wrappingKey, base64UrlDecode(profile.keyMaterial));
+    const grant = {
+      version: 1,
+      type: "selfchat-enrollment-grant",
+      profileId: request.profileId,
+      requesterDeviceId: request.deviceId,
+      authorizerDeviceId: authorizerCredentials.deviceId,
+      requestHash,
+      createdAt,
+      expiresAt,
+      ephemeralAgreementPublicJwk: ephemeralPublic,
+      authorizerSigningPublicJwk: authorizerCredentials.signing.publicJwk,
+      salt: base64UrlEncode(salt),
+      iv: base64UrlEncode(iv),
+      wrappedProfileKey: base64UrlEncode(wrappedProfileKey)
+    };
+    return { ...grant, signature: await sign(grant, authorizerCredentials.signing.privateJwk, api) };
+  }
+
+  async function acceptEnrollmentGrant(grant, request, requesterCredentials, trustedAuthorizer, {
+    now = Date.now(),
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    const { signature, ...body } = grant || {};
+    if (body.version !== 1 || body.type !== "selfchat-enrollment-grant") throw new Error("Unsupported enrollment grant");
+    if (body.authorizerDeviceId !== trustedAuthorizer?.deviceId) throw new Error("Enrollment grant authorizer is not trusted");
+    if (!(await verify(body, signature, trustedAuthorizer.signingPublicJwk, api))) throw new Error("Enrollment grant signature is invalid");
+    if (!(await verifyEnrollmentRequest(request, api))) throw new Error("Enrollment request proof is invalid");
+    if (body.profileId !== request.profileId || body.requesterDeviceId !== requesterCredentials.deviceId) throw new Error("Enrollment grant target does not match this device");
+    const requestHash = base64UrlEncode(await sha256(stableStringify(request), api));
+    if (body.requestHash !== requestHash) throw new Error("Enrollment grant does not match the request");
+    if (!Number.isFinite(Date.parse(body.expiresAt)) || now > Date.parse(body.expiresAt)) throw new Error("Enrollment grant has expired");
+    const info = `selfchat-enrollment:${body.profileId}:${request.nonce}`;
+    const wrappingKey = await deriveEnrollmentKey(requesterCredentials.agreement.privateJwk, body.ephemeralAgreementPublicJwk, base64UrlDecode(body.salt), info, api);
+    const raw = await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(body.iv), additionalData: bytes(requestHash) }, wrappingKey, base64UrlDecode(body.wrappedProfileKey));
+    return base64UrlEncode(raw);
+  }
+
+  async function importProfileKey(profileKey, usage, cryptoOverride) {
+    return cryptoApi(cryptoOverride).subtle.importKey("raw", base64UrlDecode(profileKey), { name: "AES-GCM" }, false, [usage]);
+  }
+
+  async function createOperationEnvelope(operations, credentials, profile, {
+    sequence,
+    createdAt = new Date().toISOString(),
+    crypto: cryptoOverride
+  } = {}) {
+    if (!Array.isArray(operations) || !operations.length) throw new Error("At least one operation is required");
+    if (!Number.isSafeInteger(sequence) || sequence < 1) throw new Error("A positive envelope sequence is required");
+    const api = cryptoApi(cryptoOverride);
+    const header = {
+      version: ENVELOPE_VERSION,
+      type: "selfchat-operation-envelope",
+      profileId: profile.id,
+      deviceId: credentials.deviceId,
+      sequence,
+      createdAt,
+      operationIds: operations.map(operation => operation.id)
+    };
+    const iv = randomBytes(12, api);
+    const key = await importProfileKey(profile.keyMaterial, "encrypt", api);
+    const ciphertext = await api.subtle.encrypt({ name: "AES-GCM", iv, additionalData: bytes(stableStringify(header)) }, key, bytes(stableStringify({ operations })));
+    const signed = { header, iv: base64UrlEncode(iv), ciphertext: base64UrlEncode(ciphertext) };
+    return { ...signed, signature: await sign(signed, credentials.signing.privateJwk, api) };
+  }
+
+  async function openOperationEnvelope(envelope, profile, authorizedDevice, {
+    minimumSequence = 0,
+    crypto: cryptoOverride
+  } = {}) {
+    const api = cryptoApi(cryptoOverride);
+    const { signature, ...signed } = envelope || {};
+    const header = signed.header || {};
+    if (header.version !== ENVELOPE_VERSION || header.type !== "selfchat-operation-envelope") throw new Error("Unsupported operation envelope");
+    if (header.profileId !== profile.id) throw new Error("Operation envelope belongs to another sync profile");
+    if (header.deviceId !== authorizedDevice?.deviceId) throw new Error("Operation envelope signer is not authorized for the claimed device");
+    if (!Number.isSafeInteger(header.sequence) || header.sequence <= minimumSequence) throw new Error("Operation envelope is stale or replayed");
+    if (!(await verify(signed, signature, authorizedDevice.signingPublicJwk, api))) throw new Error("Operation envelope signature is invalid");
+    const key = await importProfileKey(profile.keyMaterial, "decrypt", api);
+    const plaintext = await api.subtle.decrypt({ name: "AES-GCM", iv: base64UrlDecode(signed.iv), additionalData: bytes(stableStringify(header)) }, key, base64UrlDecode(signed.ciphertext));
+    const payload = JSON.parse(decoder.decode(plaintext));
+    if (!Array.isArray(payload.operations) || stableStringify(payload.operations.map(operation => operation.id)) !== stableStringify(header.operationIds)) {
+      throw new Error("Operation envelope contents do not match its authenticated header");
+    }
+    return { header, operations: payload.operations };
+  }
+
+  return {
+    ENVELOPE_VERSION,
+    stableStringify,
+    base64UrlEncode,
+    base64UrlDecode,
+    generateDeviceCredentials,
+    generateProfileKey,
+    createEnrollmentRequest,
+    verifyEnrollmentRequest,
+    issueEnrollmentGrant,
+    acceptEnrollmentGrant,
+    createOperationEnvelope,
+    openOperationEnvelope
+  };
+});

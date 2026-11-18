@@ -3175,7 +3175,10 @@ async function renderStorageDiagnostics() {
   const quota = estimate?.quota == null ? "" : ` of ${(estimate.quota / 1024 / 1024).toFixed(0)} MB`;
   const lastExport = repository ? await repository.getMeta("lastExport").catch(() => null) : localStorage.getItem("selfchat-last-export-v1");
   const exportText = lastExport ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(lastExport)) : "Never";
-  elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
+  const syncStatus = repository?.metadata.syncProfile && repository?.metadata.deviceCredentials
+    ? "Encrypted sync identity ready · transport off"
+    : "Encrypted sync identity unavailable";
+  elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${syncStatus} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
 }
 
 function runningAsInstalledApp() {

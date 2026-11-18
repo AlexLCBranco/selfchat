@@ -288,3 +288,13 @@ Operation IDs combine device ID and counter. Merge is idempotent by operation ID
 This milestone adds no backend, transport, account, authentication, device enrollment, encryption, remote-operation application, or blob transfer. Active-chat selection and backup bookkeeping remain device-local. SC-20 remains incomplete until those privacy and transport boundaries are separately implemented and verified.
 
 Reason: durable local causality and deterministic convergence must exist before network synchronization, while preserving current data, offline capture, the unified transactional model, and the existing privacy boundary.
+
+## 2026-11-18 — SC-20 encrypted envelope and enrollment boundary
+
+Each local profile receives one random 256-bit sync key plus per-device P-256 signing and key-agreement credentials. Enrollment is authorization by an already trusted device: the requester signs its profile-bound request, the authorizer verifies possession, wraps the profile key using ephemeral ECDH with HKDF-SHA-256 and AES-256-GCM, and signs a short-lived grant. The accepting device must verify the grant against an independently trusted authorizer signing key.
+
+Operation batches use AES-256-GCM with the profile key, authenticate profile ID, device ID, sequence, creation time, and operation IDs as additional data, and carry a device signature over the complete encrypted envelope. Receivers reject wrong-profile, invalid-signature, mismatched-content, and stale-sequence envelopes before application.
+
+The backend boundary is a transport-neutral interface for encrypted envelopes and encrypted attachment chunks. It is unconfigured and disabled by default. Version 2.6.0 adds no endpoint, backend instance, account, pairing UI, remote operation application, blob transfer, or message transmission. Local plaintext storage remains unchanged; the sync key and private credentials stay inside the same browser-local privacy boundary until explicit pairing is implemented.
+
+Reason: encryption and device authorization must be specified, persisted, and adversarially tested before any backend can receive user data or any remote operation can modify the local projection.

@@ -54,6 +54,16 @@ function adapters(overrides = {}) {
     loadLegacyState: () => structuredClone(fixture),
     getAllImages: async () => [{ id: "image-1", name: "one.png", blob: new Blob(["image"], { type: "image/png" }) }],
     getRecoverySnapshots: async () => [{ id: "old-snapshot", createdAt: "2026-11-01T11:00:00.000Z", state: structuredClone(fixture), messageCount: 2, chatCount: 2 }],
+    createSyncSecurityFoundation: async ({ deviceIdentity, createdAt }) => ({
+      profile: { version: 1, id: "profile-test", createdAt, algorithm: "AES-GCM-256", keyMaterial: "test-key-material" },
+      credentials: {
+        version: 1,
+        deviceId: deviceIdentity.id,
+        createdAt,
+        signing: { publicJwk: { kty: "EC", x: "sign-x", y: "sign-y" }, privateJwk: { kty: "EC", d: "sign-private" } },
+        agreement: { publicJwk: { kty: "EC", x: "agree-x", y: "agree-y" }, privateJwk: { kty: "EC", d: "agree-private" } }
+      }
+    }),
     ...overrides
   };
 }
@@ -319,6 +329,19 @@ test("sync foundation creates one durable device identity and bootstraps existin
   assert.deepEqual(repository.metadata.deviceIdentity, firstIdentity);
   assert.equal(repository.metadata.logicalClock, firstClock);
   assert.equal((await repository.listOperations()).length, firstOperations.length);
+});
+
+test("sync security foundation persists one encrypted profile identity while transport stays disabled", async () => {
+  repository = await storage.open(adapters({ createDeviceId: () => "device-secure" }));
+  assert.equal(repository.metadata.syncProfile.id, "profile-test");
+  assert.equal(repository.metadata.deviceCredentials.deviceId, "device-secure");
+  assert.deepEqual(repository.metadata.authorizedDevices.map(device => device.deviceId), ["device-secure"]);
+  assert.deepEqual(repository.metadata.syncTransport, { configured: false, enabled: false });
+  const firstCredentials = structuredClone(repository.metadata.deviceCredentials);
+  repository.close();
+  repository = await storage.open(adapters({ createDeviceId: () => "replacement-device" }));
+  assert.deepEqual(repository.metadata.deviceCredentials, firstCredentials);
+  assert.equal(repository.metadata.syncTransport.enabled, false);
 });
 
 test("entity data and its logical operation commit atomically with monotonic ordering", async () => {

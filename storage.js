@@ -2,6 +2,7 @@
   "use strict";
 
   const core = root.SelfChatStorageCore;
+  const syncCrypto = root.SelfChatSyncCrypto || (typeof require === "function" ? require("./sync-crypto.js") : null);
   const DB_NAME = "selfchat-unified-v1";
   const DB_VERSION = 2;
   const LEGACY_DB_NAME = "selfchat-local-v1";
@@ -210,6 +211,12 @@
     return `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   }
 
+  function createSyncProfileId(adapters) {
+    if (adapters.createSyncProfileId) return adapters.createSyncProfileId();
+    if (root.crypto?.randomUUID) return root.crypto.randomUUID();
+    return `profile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
   async function ensureSyncFoundation(db, state, adapters) {
     const transaction = db.transaction(["meta", "operations", "attachments"], "readwrite");
     const meta = transaction.objectStore("meta");
@@ -241,6 +248,47 @@
     meta.put({ key: "logicalClock", value: logicalClock, updatedAt: new Date().toISOString() });
     await transactionDone(transaction);
     return { deviceIdentity, logicalClock };
+  }
+
+  async function ensureSyncSecurityFoundation(db, deviceIdentity, adapters) {
+    const current = await getAllMeta(db);
+    if (current.syncProfile && current.deviceCredentials && current.authorizedDevices && current.syncTransport) {
+      return;
+    }
+    if (!syncCrypto) throw new Error("SelfChat sync cryptography is unavailable");
+    const createdAt = new Date().toISOString();
+    const generated = adapters.createSyncSecurityFoundation
+      ? await adapters.createSyncSecurityFoundation({ deviceIdentity, createdAt })
+      : {
+          profile: {
+            version: 1,
+            id: createSyncProfileId(adapters),
+            createdAt,
+            algorithm: "AES-GCM-256",
+            keyMaterial: syncCrypto.generateProfileKey()
+          },
+          credentials: await syncCrypto.generateDeviceCredentials({ deviceId: deviceIdentity.id, createdAt })
+        };
+    const profile = current.syncProfile || generated.profile;
+    const credentials = current.deviceCredentials || generated.credentials;
+    if (!profile?.id || !profile?.keyMaterial || credentials?.deviceId !== deviceIdentity.id) {
+      throw new Error("Invalid local synchronization security foundation");
+    }
+    const authorizedDevices = current.authorizedDevices || [{
+      deviceId: deviceIdentity.id,
+      signingPublicJwk: credentials.signing.publicJwk,
+      agreementPublicJwk: credentials.agreement.publicJwk,
+      authorizedAt: createdAt,
+      authorizedBy: deviceIdentity.id
+    }];
+    const syncTransport = current.syncTransport || { configured: false, enabled: false };
+    const transaction = db.transaction("meta", "readwrite");
+    const meta = transaction.objectStore("meta");
+    if (!current.syncProfile) meta.put({ key: "syncProfile", value: profile, updatedAt: createdAt });
+    if (!current.deviceCredentials) meta.put({ key: "deviceCredentials", value: credentials, updatedAt: createdAt });
+    if (!current.authorizedDevices) meta.put({ key: "authorizedDevices", value: authorizedDevices, updatedAt: createdAt });
+    if (!current.syncTransport) meta.put({ key: "syncTransport", value: syncTransport, updatedAt: createdAt });
+    await transactionDone(transaction);
   }
 
   async function pruneSnapshots(db) {
@@ -310,7 +358,8 @@
       db.close();
       throw error;
     }
-    await ensureSyncFoundation(db, initialState, adapters);
+    const syncFoundation = await ensureSyncFoundation(db, initialState, adapters);
+    await ensureSyncSecurityFoundation(db, syncFoundation.deviceIdentity, adapters);
     const metadata = await getAllMeta(db);
     let pendingCommit = Promise.resolve();
     const repository = {
