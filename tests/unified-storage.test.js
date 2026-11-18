@@ -81,17 +81,48 @@ async function seedV092Database(state, backupImages = []) {
   db.close();
 }
 
+async function seedUnifiedV1Database(state) {
+  const request = indexedDB.open(storage.DB_NAME, 1);
+  request.onupgradeneeded = () => {
+    const db = request.result;
+    for (const [name, keyPath] of [["chats", "id"], ["messages", "id"], ["stickers", "id"], ["drafts", "chatId"], ["attachments", "id"], ["trash", "id"], ["snapshots", "id"], ["meta", "key"]]) {
+      db.createObjectStore(name, { keyPath });
+    }
+  };
+  const db = await new Promise((resolve, reject) => { request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); });
+  const transaction = db.transaction(["chats", "messages", "stickers", "drafts", "attachments", "trash", "meta"], "readwrite");
+  state.chats.forEach(record => transaction.objectStore("chats").put(record));
+  state.messages.forEach(record => transaction.objectStore("messages").put(record));
+  state.customStickers.forEach(record => transaction.objectStore("stickers").put(record));
+  Object.entries(state.drafts).forEach(([chatId, text]) => transaction.objectStore("drafts").put({ chatId, text }));
+  state.trash.forEach(record => transaction.objectStore("trash").put(record));
+  transaction.objectStore("attachments").put({ id: "image-1", name: "one.png", blob: new Blob(["image"], { type: "image/png" }) });
+  transaction.objectStore("meta").put({ key: "activeSchema", value: 1 });
+  transaction.objectStore("meta").put({ key: "activeChatId", value: state.activeChatId });
+  await new Promise((resolve, reject) => { transaction.oncomplete = resolve; transaction.onerror = () => reject(transaction.error); });
+  db.close();
+}
+
 test.beforeEach(reset);
 test.after(reset);
 
 test("migration from a v0.9.2 fixture preserves chats, messages, images, and Trash", async () => {
   repository = await storage.open(adapters());
-  assert.deepEqual([...repository.db.objectStoreNames], ["attachments", "chats", "drafts", "messages", "meta", "snapshots", "stickers", "trash"]);
+  assert.deepEqual([...repository.db.objectStoreNames], ["attachments", "chats", "drafts", "messages", "meta", "operations", "snapshots", "stickers", "trash"]);
   const migrated = await repository.load();
   const attachments = await repository.getAllAttachments();
   assert.deepEqual(core.stateCounts({ ...migrated, attachments }), { chats: 2, messages: 2, images: 1, trash: 1 });
   assert.deepEqual(repository.metadata.migrationCounts, { chats: 2, messages: 2, images: 1, trash: 1 });
   assert.equal((await repository.listSnapshots()).length, 1);
+});
+
+test("schema upgrade preserves an existing unified v1 profile and adds sync history", async () => {
+  await seedUnifiedV1Database(fixture);
+  repository = await storage.open(adapters({ createDeviceId: () => "upgrade-device" }));
+  const upgraded = await repository.load();
+  assert.deepEqual(core.stateCounts({ ...upgraded, attachments: await repository.getAllAttachments() }), { chats: 2, messages: 2, images: 1, trash: 1 });
+  assert.equal(repository.metadata.deviceIdentity.id, "upgrade-device");
+  assert.equal((await repository.listOperations()).some(operation => operation.entityId === "m1"), true);
 });
 
 test("global visibility metadata persists without changing chat records", async () => {
@@ -103,6 +134,7 @@ test("global visibility metadata persists without changing chat records", async 
   repository.close();
   repository = await storage.open(adapters());
   assert.deepEqual(repository.metadata.globalHiddenChatIds, ["topic"]);
+  assert.equal((await repository.listOperations()).some(operation => operation.store === "meta" && operation.entityId === "globalHiddenChatIds"), true);
 });
 
 test("migration reads the active v0.9.2 transactional projection and recovers an image from its verified safety backup", async () => {
@@ -271,4 +303,58 @@ test("ordinary commits write changed records and create no more than one recover
   assert.equal(after.messages.some(message => message.id === "first"), true);
   assert.equal(after.messages.some(message => message.id === "second"), true);
   assert.equal((await repository.listSnapshots()).length, 1);
+});
+
+test("sync foundation creates one durable device identity and bootstraps existing data", async () => {
+  repository = await storage.open(adapters({ createDeviceId: () => "device-a" }));
+  const firstIdentity = repository.metadata.deviceIdentity;
+  const firstOperations = await repository.listOperations();
+  assert.equal(firstIdentity.id, "device-a");
+  assert.equal(firstOperations.some(operation => operation.store === "messages" && operation.entityId === "m1"), true);
+  assert.equal(new Set(firstOperations.map(operation => operation.id)).size, firstOperations.length);
+  const firstClock = repository.metadata.logicalClock;
+
+  repository.close();
+  repository = await storage.open(adapters({ createDeviceId: () => "replacement-device" }));
+  assert.deepEqual(repository.metadata.deviceIdentity, firstIdentity);
+  assert.equal(repository.metadata.logicalClock, firstClock);
+  assert.equal((await repository.listOperations()).length, firstOperations.length);
+});
+
+test("entity data and its logical operation commit atomically with monotonic ordering", async () => {
+  repository = await storage.open(adapters({ createDeviceId: () => "device-a" }));
+  const before = await repository.listOperations();
+  await repository.commit({
+    messagesPut: [{ id: "logical", chatId: "topic", text: "ordered", createdAt: "2026-11-18T12:00:00.000Z" }]
+  }, { significant: false });
+  const operation = (await repository.listOperations()).find(item => item.entityId === "logical");
+  assert.equal((await repository.load()).messages.some(message => message.id === "logical"), true);
+  assert.equal(operation.deviceId, "device-a");
+  assert.equal(operation.action, "put");
+  assert.equal(operation.counter, Math.max(...before.map(item => item.counter)) + 1);
+  assert.equal(repository.metadata.logicalClock, operation.counter);
+});
+
+test("concurrent local commits receive distinct monotonic operation IDs", async () => {
+  repository = await storage.open(adapters({ createDeviceId: () => "device-a" }));
+  await Promise.all([
+    repository.commit({ messagesPut: [{ id: "parallel-1", chatId: "topic", text: "one" }] }, { significant: false }),
+    repository.commit({ messagesPut: [{ id: "parallel-2", chatId: "topic", text: "two" }] }, { significant: false })
+  ]);
+  const operations = (await repository.listOperations()).filter(operation => operation.entityId.startsWith("parallel-"));
+  assert.equal(operations.length, 2);
+  assert.equal(new Set(operations.map(operation => operation.id)).size, 2);
+  assert.equal(Math.abs(operations[0].counter - operations[1].counter), 1);
+});
+
+test("permanent deletion also removes matching local sync history", async () => {
+  repository = await storage.open(adapters({ createDeviceId: () => "device-a" }));
+  assert.equal((await repository.listOperations()).some(operation => operation.entityId === "m2"), true);
+  const target = fixture.messages.find(message => message.id === "m2");
+  const targets = {
+    entityIds: new Set([target.id]), chatIds: new Set(), messageIds: new Set([target.id]), imageIds: new Set([target.imageId])
+  };
+  const current = core.normalizeState({ ...fixture, messages: fixture.messages.filter(message => message.id !== target.id), trash: [] }, fallback);
+  await repository.purgeEveryCopy(targets, current);
+  assert.equal((await repository.listOperations()).some(operation => operation.entityId === target.id || operation.entityId === target.imageId), false);
 });

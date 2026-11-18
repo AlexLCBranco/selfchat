@@ -3,10 +3,11 @@
 
   const core = root.SelfChatStorageCore;
   const DB_NAME = "selfchat-unified-v1";
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
   const LEGACY_DB_NAME = "selfchat-local-v1";
   const MAX_DAILY_SNAPSHOTS = 30;
   const STORES = ["chats", "messages", "stickers", "drafts", "attachments", "trash", "snapshots", "meta"];
+  const TRANSACTION_STORES = [...STORES, "operations"];
 
   function requestResult(request) {
     return new Promise((resolve, reject) => {
@@ -46,6 +47,9 @@
         const snapshots = ensureStore("snapshots", { keyPath: "id" });
         ensureIndex(snapshots, "createdAt", "createdAt");
         ensureStore("meta", { keyPath: "key" });
+        const operations = ensureStore("operations", { keyPath: "id" });
+        ensureIndex(operations, "logicalOrder", ["counter", "deviceId", "id"]);
+        ensureIndex(operations, "deviceId", "deviceId");
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error);
@@ -195,7 +199,48 @@
     (diff.trashDelete || []).forEach(id => stores.trash.delete(id));
     (diff.attachmentsPut || []).forEach(record => stores.attachments.put(record));
     (diff.attachmentsDelete || []).forEach(id => stores.attachments.delete(id));
+    (diff.metaPut || []).forEach(record => stores.meta.put(record));
+    (diff.metaDelete || []).forEach(key => stores.meta.delete(key));
     if (diff.activeChatId) stores.meta.put({ key: "activeChatId", value: diff.activeChatId });
+  }
+
+  function createDeviceId(adapters) {
+    if (adapters.createDeviceId) return adapters.createDeviceId();
+    if (root.crypto?.randomUUID) return root.crypto.randomUUID();
+    return `device-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  async function ensureSyncFoundation(db, state, adapters) {
+    const transaction = db.transaction(["meta", "operations", "attachments"], "readwrite");
+    const meta = transaction.objectStore("meta");
+    const operations = transaction.objectStore("operations");
+    const [existingIdentity, existingClock, globalHiddenChatIds, operationCount, attachments] = await Promise.all([
+      requestResult(meta.get("deviceIdentity")),
+      requestResult(meta.get("logicalClock")),
+      requestResult(meta.get("globalHiddenChatIds")),
+      requestResult(operations.count()),
+      requestResult(transaction.objectStore("attachments").getAll())
+    ]);
+    const deviceIdentity = existingIdentity?.value || {
+      id: createDeviceId(adapters),
+      createdAt: new Date().toISOString()
+    };
+    let logicalClock = Number.isSafeInteger(existingClock?.value) ? existingClock.value : 0;
+    if (!existingIdentity?.value) meta.put({ key: "deviceIdentity", value: deviceIdentity, updatedAt: deviceIdentity.createdAt });
+    if (!operationCount) {
+      const bootstrapDiff = core.bootstrapSyncDiff(state, attachments);
+      if (globalHiddenChatIds) bootstrapDiff.metaPut = [globalHiddenChatIds];
+      const bootstrap = core.syncOperationsForDiff(bootstrapDiff, {
+        deviceId: deviceIdentity.id,
+        startCounter: logicalClock,
+        recordedAt: deviceIdentity.createdAt
+      });
+      bootstrap.operations.forEach(operation => operations.put(operation));
+      logicalClock = bootstrap.counter;
+    }
+    meta.put({ key: "logicalClock", value: logicalClock, updatedAt: new Date().toISOString() });
+    await transactionDone(transaction);
+    return { deviceIdentity, logicalClock };
   }
 
   async function pruneSnapshots(db) {
@@ -265,43 +310,93 @@
       db.close();
       throw error;
     }
+    await ensureSyncFoundation(db, initialState, adapters);
     const metadata = await getAllMeta(db);
+    let pendingCommit = Promise.resolve();
     const repository = {
       db,
       initialState,
       metadata,
       async load() { return loadState(db, adapters.defaultState); },
       async commit(diff, { significant = true, snapshotState = null } = {}) {
-        const today = new Date().toISOString().slice(0, 10);
-        const createDailySnapshot = significant && snapshotState && metadata.lastSnapshotDay !== today;
-        const transaction = db.transaction(STORES, "readwrite");
-        const stores = Object.fromEntries(STORES.map(name => [name, transaction.objectStore(name)]));
-        if (createDailySnapshot) {
-          const createdAt = new Date().toISOString();
-          stores.snapshots.put({ id: `daily-${today}`, createdAt, label: "Daily recovery point", messageCount: snapshotState.messages.length, chatCount: snapshotState.chats.length, state: core.normalizeState(snapshotState, adapters.defaultState) });
-          stores.meta.put({ key: "lastSnapshotDay", value: today });
-        }
-        applyDiff(stores, diff);
-        await transactionDone(transaction);
-        if (createDailySnapshot) {
-          metadata.lastSnapshotDay = today;
-          await pruneSnapshots(db);
+        const previousCommit = pendingCommit;
+        let releaseCommit;
+        pendingCommit = new Promise(resolve => { releaseCommit = resolve; });
+        await previousCommit;
+        try {
+          const today = new Date().toISOString().slice(0, 10);
+          const createDailySnapshot = significant && snapshotState && metadata.lastSnapshotDay !== today;
+          const sync = core.syncOperationsForDiff(diff, {
+            deviceId: metadata.deviceIdentity.id,
+            startCounter: metadata.logicalClock || 0
+          });
+          const transaction = db.transaction(TRANSACTION_STORES, "readwrite");
+          const stores = Object.fromEntries(TRANSACTION_STORES.map(name => [name, transaction.objectStore(name)]));
+          if (createDailySnapshot) {
+            const createdAt = new Date().toISOString();
+            stores.snapshots.put({ id: `daily-${today}`, createdAt, label: "Daily recovery point", messageCount: snapshotState.messages.length, chatCount: snapshotState.chats.length, state: core.normalizeState(snapshotState, adapters.defaultState) });
+            stores.meta.put({ key: "lastSnapshotDay", value: today });
+          }
+          applyDiff(stores, diff);
+          sync.operations.forEach(operation => stores.operations.add(operation));
+          if (sync.operations.length) stores.meta.put({ key: "logicalClock", value: sync.counter, updatedAt: new Date().toISOString() });
+          await transactionDone(transaction);
+          if (sync.operations.length) metadata.logicalClock = sync.counter;
+          if (createDailySnapshot) {
+            metadata.lastSnapshotDay = today;
+            await pruneSnapshots(db);
+          }
+        } finally {
+          releaseCommit();
         }
       },
       async replaceState(value) {
         const next = core.normalizeState(value, adapters.defaultState);
-        const names = ["chats", "messages", "stickers", "drafts", "trash", "meta"];
+        const current = await loadState(db, adapters.defaultState);
+        const removed = (before, after, key = "id") => {
+          const nextIds = new Set(after.map(record => record[key]));
+          return before.map(record => record[key]).filter(id => !nextIds.has(id));
+        };
+        const diff = {
+          chatsPut: next.chats,
+          chatsDelete: removed(current.chats, next.chats),
+          messagesPut: next.messages,
+          messagesDelete: removed(current.messages, next.messages),
+          stickersPut: next.customStickers,
+          stickersDelete: removed(current.customStickers, next.customStickers),
+          draftsPut: Object.entries(next.drafts).filter(([, text]) => text).map(([chatId, text]) => ({ chatId, text })),
+          draftsDelete: Object.keys(current.drafts).filter(chatId => !next.drafts[chatId]),
+          trashPut: next.trash,
+          trashDelete: removed(current.trash, next.trash)
+        };
+        const sync = core.syncOperationsForDiff(diff, {
+          deviceId: metadata.deviceIdentity.id,
+          startCounter: metadata.logicalClock || 0
+        });
+        const names = ["chats", "messages", "stickers", "drafts", "trash", "meta", "operations"];
         const transaction = db.transaction(names, "readwrite");
         const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
         ["chats", "messages", "stickers", "drafts", "trash"].forEach(name => stores[name].clear());
         putState(stores, next);
+        sync.operations.forEach(operation => stores.operations.add(operation));
+        if (sync.operations.length) stores.meta.put({ key: "logicalClock", value: sync.counter, updatedAt: new Date().toISOString() });
         await transactionDone(transaction);
+        if (sync.operations.length) metadata.logicalClock = sync.counter;
       },
       async getAttachment(id) { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").get(id)); },
       async getAllAttachments() { return requestResult(db.transaction("attachments", "readonly").objectStore("attachments").getAll()); },
+      async listOperations() {
+        const operations = await requestResult(db.transaction("operations", "readonly").objectStore("operations").getAll());
+        return core.mergeSyncOperations(operations);
+      },
       async listSnapshots() { return requestResult(db.transaction("snapshots", "readonly").objectStore("snapshots").getAll()); },
       async getMeta(key) { return (await getMeta(db, key))?.value; },
       async setMeta(key, value) {
+        if (key === "globalHiddenChatIds") {
+          await repository.commit({ metaPut: [{ key, value, updatedAt: new Date().toISOString() }] }, { significant: false });
+          metadata[key] = value;
+          return;
+        }
         const transaction = db.transaction("meta", "readwrite");
         transaction.objectStore("meta").put({ key, value, updatedAt: new Date().toISOString() });
         await transactionDone(transaction);
@@ -322,7 +417,7 @@
           return { ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length };
         });
         const referenced = core.referencedAttachmentIds(currentState, redactedSnapshots.map(snapshot => snapshot.state));
-        const names = ["chats", "messages", "drafts", "trash", "snapshots", "attachments"];
+        const names = ["chats", "messages", "drafts", "trash", "snapshots", "attachments", "operations"];
         const transaction = db.transaction(names, "readwrite");
         const stores = Object.fromEntries(names.map(name => [name, transaction.objectStore(name)]));
         targets.chatIds.forEach(id => { stores.chats.delete(id); stores.drafts.delete(id); });
@@ -335,6 +430,13 @@
         };
         redactedSnapshots.forEach(snapshot => stores.snapshots.put(snapshot));
         [...targets.imageIds].filter(id => !referenced.has(id)).forEach(id => stores.attachments.delete(id));
+        stores.operations.openCursor().onsuccess = event => {
+          const cursor = event.target.result;
+          if (!cursor) return;
+          const operation = cursor.value;
+          if (targets.entityIds.has(operation.entityId) || targets.imageIds.has(operation.entityId)) cursor.delete();
+          cursor.continue();
+        };
         await transactionDone(transaction);
         await purgeLegacyDatabase(targets, adapters.defaultState);
       },

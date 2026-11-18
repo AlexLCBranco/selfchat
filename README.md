@@ -1,10 +1,10 @@
 # SelfChat
 
-SelfChat v2.4.0 is a private, desktop-first message stream organized into multiple chats containing only you.
+SelfChat v2.5.0 is a private, desktop-first message stream organized into multiple chats containing only you.
 
 It supports fast text entry, a derived chronological All Messages view with per-chat visibility controls, chat-specific notes, a two-chat desktop split view, pinned and manually ordered chats, titled/tagged/duplicated messages, direct message links, starred and permanently pinned messages, collapsible long messages, fenced code blocks with copy controls, media/link/file galleries, type and date-filtered search, keyboard chat switching, custom local-image chat avatars, replies with quoted context, images, stickers, generic file attachments, local search, File Explorer-style message selection and drag-to-move, selected-message copy and move, recoverable Trash, daily recovery points, and local backup import/export. It has no recipients, accounts, AI replies, analytics, or cloud sync.
 
-The current installability milestone provides a browser-installable offline app shell and an in-app install entry point when the browser exposes one. Windows-specific packaging, a mobile interaction layout, and cross-device synchronization remain future approved work.
+The first SC-20 implementation milestone adds local synchronization metadata: a durable per-profile device identity, atomic entity operation tracking, Lamport ordering, idempotent operation merging, and deterministic same-entity conflict rules. It does not connect to a backend or transmit data. Encryption, authenticated device enrollment, transport, remote application, and attachment transfer remain future SC-20 work.
 
 ## Run locally
 
@@ -28,6 +28,8 @@ The domain is attached to the project and follows future production deployments 
 
 - Chats, messages, drafts, Trash, recovery points, images, and attachments are stored in one transactional IndexedDB database.
 - Messages and attachment blobs commit atomically. Ordinary saves write only changed records.
+- Each local entity change commits an immutable operation and logical clock update in the same transaction. Existing unified data is preserved and receives a one-time bootstrap history when schema version 2 opens.
+- Device identity is random, local to the current browser profile and origin, and is not an account or authentication credential. Attachment operations track blob references and metadata without duplicating blob bytes.
 - Optional custom chat avatars are locally cropped and stored with other attachment blobs; emoji icons remain available as fallbacks.
 - On the first run of this storage version, v0.9.2 data is copied and count-verified before the unified database activates. The old sources remain in place for this version.
 - SelfChat asks the browser for persistent storage. The result is shown in the always-visible data status panel.

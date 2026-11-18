@@ -4,21 +4,33 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source version is **v2.4.0**.
-- v2.4.0 is deployed at `https://selfchat-home.vercel.app` (deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu`). Deployment protection remains enabled.
-- v2.4.0 is the first shared implementation milestone for approved SC-21 and SC-22: it adds an in-app browser install entry point, offline-readiness feedback, explicit manifest identity/scope, and a guarded same-origin offline cache policy.
-- SC-20, SC-21, and SC-22 remain **Approved**, not Implemented. SC-20 synchronization has not started. Windows-specific support/packaging and the mobile interaction model have not started.
+- The current visible source version is **v2.5.0**. Production remains **v2.4.0** at `https://selfchat-home.vercel.app` (deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu`); v2.5.0 has not been deployed.
+- v2.5.0 is the first safe implementation milestone for SC-20. It adds only the local synchronization substrate: device identity, logical ordering, durable atomic entity operations, idempotent merge, deterministic conflict selection, and non-destructive schema upgrade/bootstrap.
+- SC-20 remains **Approved / in progress**, not fully Implemented. There is no backend, account, authentication, device enrollment, encryption, network transport, remote-operation application, or attachment transfer.
+- SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
 - `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
 
 ## Delivery state
 
-- **Implemented:** v2.4.0 exists in the current working tree.
-- **Tested:** yes. All required syntax checks, 59 automated tests, and the browser parity pass described below passed on 2026-11-18.
-- **Committed:** yes. Release commit `4b373c1` contains the v2.4.0 implementation, tests, backlog, and continuity rules.
-- **Pushed:** yes. `4b373c1` is on `origin/main`.
-- **Deployed:** yes. Deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY and aliased to the production URL above. Deployment remains an explicit-approval action for future changes.
+- **Implemented:** v2.5.0 local SC-20 foundation exists in the current working tree.
+- **Tested:** yes. All required syntax checks, 68 automated tests, `git diff --check`, and the browser persistence/error pass described below passed on 2026-11-18.
+- **Committed:** pending final verified milestone commit.
+- **Pushed:** pending final verified milestone push.
+- **Deployed:** no. Production intentionally remains v2.4.0; deployment requires explicit authorization.
 
-## Latest continuity update — 2026-11-18
+## SC-20 local foundation — 2026-11-18
+
+- **Storage upgrade:** `selfchat-unified-v1` advances from schema version 1 to 2 by adding an indexed `operations` store. The upgrade leaves all existing chats, messages, drafts, Trash, snapshots, stickers, attachments, and metadata in place.
+- **Identity and bootstrap:** first open creates one random browser-profile/origin device ID and a logical counter. Existing local entities receive per-entity bootstrap operations; reopening is idempotent and does not regenerate identity or duplicate history.
+- **Atomic tracking:** ordinary local puts/deletes and their operation records share one IndexedDB transaction. Operations cover chats, messages, stickers, drafts, Trash, attachment references, and All Messages visibility. Attachment operations omit blob bytes. Concurrent local commits are serialized so IDs and counters remain unique.
+- **Ordering and conflict rule:** operation IDs are device ID plus counter. Operations deduplicate by ID and sort by Lamport counter, binary device ID, then operation ID. The greatest operation for a store/entity key wins deterministically, including delete-versus-update conflicts.
+- **Data lifecycle:** point-in-time state replacement emits operations; explicit permanent erasure removes matching operation history as well as existing local and legacy copies.
+- **Privacy boundary:** no network call, cloud storage, account, authentication, encryption, remote ingest, or attachment transfer was added.
+- **Checks:** `node --check app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, and `service-worker.js`; all 68 automated tests; and `git diff --check` passed. Browser verification at `http://127.0.0.1:47832` loaded v2.5.0 over the existing local profile, preserved all 8 visible messages and the persisted-storage status after reload, and showed no console warnings or errors. The pass made no user-data changes.
+- **Remaining risks:** the deterministic last-writer rule is defined but remote validation/application is not implemented; unbounded operation retention and future compaction are unresolved; attachment bytes need encrypted chunk transfer and integrity checks; cross-device permanent-deletion propagation needs an encrypted tombstone design that does not conflict with local permanent-erasure guarantees.
+- **Next recommended step:** design and implement encrypted operation envelopes, authenticated device enrollment, and a minimal backend boundary before adding any transport. Keep remote application disabled until envelope validation, replay protection, deletion semantics, and attachment integrity tests pass.
+
+## Prior continuity update — 2026-11-18
 
 - **Low-interruption development policy:** an explicitly authorized development task now carries standing authorization for autonomous implementation, testing, debugging, documentation, and routine commit/push synchronization to the existing SelfChat GitHub repository. Separate approval remains required for production deployment, destructive or user-data deletion operations, credentials or access changes, security-sensitive changes, unexpected costs, material architectural changes, and work outside the approved scope. Codex permission and sandbox restrictions remain binding.
 - **Repository synchronization:** the durable `AGENTS.md` rules now explicitly require milestone backlog updates, implementation-result and next-step handoffs, architectural decision records, approved report-inclusive commits and pushes, successful-push verification before claiming GitHub synchronization, and a strict separation between Git pushes and production deployments.
@@ -32,11 +44,13 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Architecture and privacy boundary
 
-- `selfchat-unified-v1` remains the only active data source. This milestone changes no IndexedDB schema or records.
+- `selfchat-unified-v1` remains the only active data source. Source v2.5.0 uses IndexedDB schema version 2 and adds operation/history metadata without replacing or clearing existing records.
+- Device ID is local random metadata, not an account or authentication credential. Lamport order is deterministic but does not claim wall-clock chronology.
+- Operation payloads remain local plaintext inside the existing browser privacy boundary. Attachment operations contain references and metadata, while blob bytes stay in `attachments`.
 - The installed app uses the same browser profile and origin data. It does not copy, upload, or synchronize message content.
 - `service-worker-core.js` owns the small testable cache-policy decisions. `service-worker.js` owns browser service-worker lifecycle and fetching.
 - Failed responses and cross-origin responses are not added to the offline cache. Navigation failures fall back to the cached app shell.
-- Before SC-20 implementation, document and approve encryption, device identity, conflict resolution, attachment handling, deletion semantics, backend boundaries, and migration.
+- Before network synchronization, define encryption/key recovery, authenticated device enrollment, backend retention and access boundaries, remote validation/application, attachment transfer/integrity, compaction, and cross-device deletion semantics.
 
 ## Verification baseline
 
@@ -66,4 +80,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 
 - No blocker is recorded for maintaining project context.
 - v2.4.0 release, push, deployment, and protected-production verification are complete.
-- Continue SC-21 and SC-22 only through separately approved scoped work; design SC-20 before implementation as described above.
+- Complete the v2.5.0 final verification, commit, and push records, but do not deploy without explicit authorization.
+- Continue SC-20 with encrypted envelopes, device enrollment, and backend-boundary design; do not add transport before those safeguards and tests exist.

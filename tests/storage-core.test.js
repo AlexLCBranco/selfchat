@@ -198,3 +198,34 @@ test("merge-only import retains current content and imports Trash records idempo
   assert.equal(merged.messages.some(item => item.id === "m1"), true);
   assert.equal(merged.trash.filter(item => item.id === "message:m2").length, 1);
 });
+
+test("sync operations are idempotent and deterministically ordered", () => {
+  const first = { id: "b:1", deviceId: "b", counter: 1, store: "messages", entityId: "m1", action: "put", value: { id: "m1", text: "b" } };
+  const second = { id: "a:2", deviceId: "a", counter: 2, store: "messages", entityId: "m2", action: "put", value: { id: "m2", text: "a" } };
+  assert.deepEqual(core.mergeSyncOperations([second, first], [first]).map(operation => operation.id), ["b:1", "a:2"]);
+});
+
+test("concurrent entity conflicts resolve identically regardless of arrival order", () => {
+  const deviceA = { id: "device-a:7", deviceId: "device-a", counter: 7, store: "messages", entityId: "m1", action: "put", value: { id: "m1", text: "A" } };
+  const deviceB = { id: "device-b:7", deviceId: "device-b", counter: 7, store: "messages", entityId: "m1", action: "put", value: { id: "m1", text: "B" } };
+  const forward = core.resolveSyncConflicts([deviceA, deviceB]);
+  const reverse = core.resolveSyncConflicts([deviceB, deviceA, deviceA]);
+  assert.deepEqual(forward, reverse);
+  assert.equal(forward[0].value.text, "B");
+});
+
+test("a logically later delete deterministically wins over an earlier update", () => {
+  const update = { id: "device-b:4", deviceId: "device-b", counter: 4, store: "messages", entityId: "m1", action: "put", value: { id: "m1", text: "keep" } };
+  const deletion = { id: "device-a:5", deviceId: "device-a", counter: 5, store: "messages", entityId: "m1", action: "delete" };
+  assert.equal(core.resolveSyncConflicts([deletion, update, update])[0].action, "delete");
+});
+
+test("attachment operations track references without duplicating blob bytes", () => {
+  const blob = new Blob(["contents"], { type: "text/plain" });
+  const result = core.syncOperationsForDiff({ attachmentsPut: [{ id: "file-1", name: "notes.txt", blob }] }, {
+    deviceId: "device-a", startCounter: 9, recordedAt: "2026-11-18T12:00:00.000Z"
+  });
+  assert.equal(result.counter, 10);
+  assert.deepEqual(result.operations[0].value, { id: "file-1", name: "notes.txt", type: "text/plain", size: 8 });
+  assert.equal("blob" in result.operations[0].value, false);
+});

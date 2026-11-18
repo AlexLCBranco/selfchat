@@ -17,6 +17,96 @@
     return value == null ? value : JSON.parse(JSON.stringify(value));
   }
 
+  const SYNC_DIFF_FIELDS = Object.freeze([
+    ["chats", "chat", "chatsPut", "chatsDelete"],
+    ["messages", "message", "messagesPut", "messagesDelete"],
+    ["stickers", "sticker", "stickersPut", "stickersDelete"],
+    ["drafts", "draft", "draftsPut", "draftsDelete"],
+    ["trash", "trash", "trashPut", "trashDelete"],
+    ["attachments", "attachment", "attachmentsPut", "attachmentsDelete"],
+    ["meta", "preference", "metaPut", "metaDelete"]
+  ]);
+
+  function operationValue(store, record) {
+    if (store !== "attachments") return clone(record);
+    return {
+      id: record.id,
+      name: record.name || "",
+      type: record.type || record.blob?.type || "",
+      size: Number(record.size ?? record.blob?.size ?? 0)
+    };
+  }
+
+  function syncOperationsForDiff(diff, { deviceId, startCounter = 0, recordedAt = new Date().toISOString() } = {}) {
+    if (typeof deviceId !== "string" || !deviceId) throw new Error("A device ID is required for sync operations");
+    let counter = Number.isSafeInteger(startCounter) && startCounter >= 0 ? startCounter : 0;
+    const operations = [];
+    const add = (store, entityType, entityId, action, value) => {
+      counter += 1;
+      operations.push({
+        id: `${deviceId}:${counter}`,
+        deviceId,
+        counter,
+        store,
+        entityType,
+        entityId,
+        action,
+        recordedAt,
+        ...(action === "put" ? { value: operationValue(store, value) } : {})
+      });
+    };
+    for (const [store, entityType, putField, deleteField] of SYNC_DIFF_FIELDS) {
+      (diff?.[putField] || []).forEach(record => {
+        const entityId = store === "drafts" ? record.chatId : store === "meta" ? record.key : record.id;
+        if (typeof entityId === "string" && entityId) add(store, entityType, entityId, "put", record);
+      });
+      (diff?.[deleteField] || []).forEach(entityId => {
+        if (typeof entityId === "string" && entityId) add(store, entityType, entityId, "delete");
+      });
+    }
+    return { operations, counter };
+  }
+
+  function compareSyncOperations(left, right) {
+    const compareText = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+    const counterDifference = (Number(left?.counter) || 0) - (Number(right?.counter) || 0);
+    if (counterDifference) return counterDifference;
+    const deviceDifference = compareText(String(left?.deviceId || ""), String(right?.deviceId || ""));
+    if (deviceDifference) return deviceDifference;
+    return compareText(String(left?.id || ""), String(right?.id || ""));
+  }
+
+  function mergeSyncOperations(...collections) {
+    const byId = new Map();
+    collections.flat().filter(Boolean).forEach(operation => {
+      if (!operation?.id || byId.has(operation.id)) return;
+      byId.set(operation.id, clone(operation));
+    });
+    return [...byId.values()].sort(compareSyncOperations);
+  }
+
+  function resolveSyncConflicts(operations) {
+    const winners = new Map();
+    mergeSyncOperations(operations).forEach(operation => {
+      const key = `${operation.store}:${operation.entityId}`;
+      const current = winners.get(key);
+      if (!current || compareSyncOperations(current, operation) < 0) winners.set(key, operation);
+    });
+    return [...winners.values()].sort(compareSyncOperations);
+  }
+
+  function bootstrapSyncDiff(state, attachments = []) {
+    const normalized = normalizeState(state, state);
+    return {
+      chatsPut: normalized.chats,
+      messagesPut: normalized.messages,
+      stickersPut: normalized.customStickers,
+      draftsPut: Object.entries(normalized.drafts).filter(([, text]) => text).map(([chatId, text]) => ({ chatId, text })),
+      trashPut: normalized.trash,
+      attachmentsPut: attachments
+    };
+  }
+
   function normalizeState(value, fallback) {
     const source = value && typeof value === "object" ? clone(value) : clone(fallback || {});
     source.chats = Array.isArray(source.chats) ? source.chats.filter(item => item && typeof item.id === "string") : [];
@@ -299,6 +389,7 @@
   return {
     UNSORTED_CHAT, normalizeState, mergeStates, migrationOperations, replayOperations, validateState,
     referencedAttachmentIds, redactState, recoverableAttachmentRecords, messageVersionTime,
-    stateCounts, backupPayload, parseBackup, newestSnapshotPerDay
+    stateCounts, backupPayload, parseBackup, newestSnapshotPerDay, syncOperationsForDiff,
+    compareSyncOperations, mergeSyncOperations, resolveSyncConflicts, bootstrapSyncDiff
   };
 });

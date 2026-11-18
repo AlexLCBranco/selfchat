@@ -266,3 +266,13 @@ An explicitly authorized development task authorizes autonomous implementation, 
 Production deployment remains a separate action that always requires explicit authorization. GitHub synchronization may be reported only after a successful push and remote-branch verification.
 
 Reason: approved milestones should proceed without repetitive workflow interruptions while preserving deliberate approval boundaries for scope expansion, risk, cost, architecture, sensitive access, data loss, and production release.
+
+## 2026-11-18 — SC-20 local synchronization foundation
+
+`selfchat-unified-v1` remains the active local source of truth and advances non-destructively to IndexedDB schema version 2. Each browser profile and origin receives one random local device ID and a monotonic Lamport counter. Entity puts and deletes for chats, messages, stickers, drafts, Trash, attachment references, and synchronized organization preferences append immutable operations in the same transaction as the materialized local records. Existing profiles receive a one-time bootstrap operation set without rewriting their content.
+
+Operation IDs combine device ID and counter. Merge is idempotent by operation ID; total order is counter, then binary device ID, then operation ID. The highest ordered operation for the same store and entity is the deterministic conflict winner. Attachment operations contain only reference metadata; blob bytes remain in the attachment store. Explicit permanent erasure also removes matching local operation history.
+
+This milestone adds no backend, transport, account, authentication, device enrollment, encryption, remote-operation application, or blob transfer. Active-chat selection and backup bookkeeping remain device-local. SC-20 remains incomplete until those privacy and transport boundaries are separately implemented and verified.
+
+Reason: durable local causality and deterministic convergence must exist before network synchronization, while preserving current data, offline capture, the unified transactional model, and the existing privacy boundary.
