@@ -20,6 +20,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Latest continuity update — 2026-11-18
 
+- **Low-interruption development policy:** an explicitly authorized development task now carries standing authorization for autonomous implementation, testing, debugging, documentation, and routine commit/push synchronization to the existing SelfChat GitHub repository. Separate approval remains required for production deployment, destructive or user-data deletion operations, credentials or access changes, security-sensitive changes, unexpected costs, material architectural changes, and work outside the approved scope. Codex permission and sandbox restrictions remain binding.
 - **Repository synchronization:** the durable `AGENTS.md` rules now explicitly require milestone backlog updates, implementation-result and next-step handoffs, architectural decision records, approved report-inclusive commits and pushes, successful-push verification before claiming GitHub synchronization, and a strict separation between Git pushes and production deployments.
 - **Implemented:** repository guidance now makes `FEATURE_BACKLOG.md` and this handoff the durable cross-session records for development status and implementation continuity. `AGENTS.md`, `README.md`, and `DECISIONS.md` describe the same hierarchy and approval boundaries.
 - **Tested:** `git diff --check`, all repository-required syntax checks, all 59 automated tests, and the v2.4.0 browser parity pass passed.
@@ -27,7 +28,7 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Pushed:** yes; `origin/main` includes `4b373c1`.
 - **Deployed:** yes; production deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY at the stable URL.
 - **Blockers:** none for the continuity workflow.
-- **Next step:** use these records in every future implementation, and obtain explicit approval before any commit, push, or deployment.
+- **Next step:** use these records in every future implementation; automatically commit and push completed, verified work within an explicitly authorized task, and obtain explicit approval before any production deployment or other approval-gated action.
 
 ## Architecture and privacy boundary
 
@@ -59,7 +60,7 @@ The 2026-11-18 v2.4.0 browser pass served `http://127.0.0.1:47832` and confirmed
 - Reload succeeds again after the local server restarts.
 - No browser console warnings or errors were present.
 
-The user explicitly approved commit, push, and production deployment on 2026-11-18. Future releases still require explicit authorization.
+The user explicitly approved commit, push, and production deployment for v2.4.0 on 2026-11-18. Future explicitly authorized development tasks carry standing authorization for routine commits and pushes to the existing repository, while every production deployment still requires separate explicit authorization.
 
 ## Current blockers and next steps
 

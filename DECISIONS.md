@@ -117,6 +117,8 @@ Reason: this milestone strengthens local durability without expanding the privac
 
 ## 2026-11-08 — Explicit authorization for deployment and pushes
 
+**Superseded for routine commits and pushes by the 2026-11-18 low-interruption development authorization.** Production deployment still requires explicit authorization.
+
 Git pushes and production deployments require explicit user authorization. This replaces the 2026-11-05 standing production deployment authorization.
 
 Reason: external changes must remain deliberate while the storage rebuild is validated locally.
@@ -251,6 +253,16 @@ Reason: strengthening the existing buildless PWA foundation is reversible and pr
 
 ## 2026-11-18 — Repository-native development continuity
 
+**Updated by the 2026-11-18 low-interruption development authorization.** Routine commits and pushes for an explicitly authorized development task no longer require separate approval; deployment remains separately approval-gated.
+
 `FEATURE_BACKLOG.md` is the persistent source of truth for milestone status and remaining work, while `CLAUDE_HANDOFF.md` is the persistent source of truth for implementation details, verification results, blockers, and next steps. Live source remains authoritative for actual behavior, and this file remains authoritative for material product, architecture, privacy, storage, and deployment decisions. Every implementation updates both continuity files and reports Implemented, Tested, Committed, Pushed, and Deployed as separate states. Commits and pushes require approval, and deployments always require explicit approval.
 
 Reason: Codex and ChatGPT sessions must be able to continue from repository history without the user manually transferring implementation reports or risking confusion between local work and released work.
+
+## 2026-11-18 — Low-interruption authorized development
+
+An explicitly authorized development task authorizes autonomous implementation, testing, debugging, documentation, and routine commits and pushes to the existing SelfChat GitHub repository. Separate confirmation is not required for ordinary commits or pushes within that scope. This standing authorization does not approve new features, production deployment, destructive operations, deletion of existing user data, credentials or access changes, security-sensitive changes, unexpected costs, material architectural changes, or bypassing Codex permission and sandbox restrictions.
+
+Production deployment remains a separate action that always requires explicit authorization. GitHub synchronization may be reported only after a successful push and remote-branch verification.
+
+Reason: approved milestones should proceed without repetitive workflow interruptions while preserving deliberate approval boundaries for scope expansion, risk, cost, architecture, sensitive access, data loss, and production release.
