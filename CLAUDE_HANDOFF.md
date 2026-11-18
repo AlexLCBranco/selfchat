@@ -4,7 +4,7 @@ This file is the persistent implementation-continuity record shared across Codex
 
 ## Current state
 
-- The current visible source version is **v2.8.0**. Production remains **v2.7.0** at `https://selfchat-home.vercel.app` (deployment `dpl_A8HAzkh9MFa6mzUT8m4xYMajhqHx`) until the verified v2.8.0 release is pushed and deployed.
+- The current visible source and production version is **v2.8.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1`).
 - v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import.
 - SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, key rotation, permanent-erasure tombstone propagation, or compaction.
 - SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
@@ -14,10 +14,10 @@ This file is the persistent implementation-continuity record shared across Codex
 
 - **Implemented:** v2.8.0 SC-20 encrypted attachment-package foundation exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 83 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** not yet for v2.8.0.
-- **Pushed:** not yet for v2.8.0.
-- **Deployed:** not yet for v2.8.0; production remains on the verified v2.7.0 deployment.
-- **Production verified:** not yet for v2.8.0.
+- **Committed:** yes. Implementation commit `2201948` contains the v2.8.0 source, tests, decisions, backlog, and initial handoff report.
+- **Pushed:** yes. `origin/main` was verified at full commit `2201948a517c98ecdceded5039b3b49ab279390b` after the implementation push; the final deployment-report commit is synchronized separately.
+- **Deployed:** yes. Deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1` is READY and aliased to `https://selfchat-home.vercel.app`.
+- **Production verified:** yes. An authenticated Vercel fetch returned v2.8.0 and the package controls. A browser load/reload at the stable URL preserved the hosted-origin message, displayed the download/import controls with automatic transport off, and produced no warnings or errors.
 
 ## SC-20 encrypted attachment packages — 2026-11-18
 
@@ -26,6 +26,7 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Atomic application:** all bundles are decrypted and verified before IndexedDB mutation. Winning attachment blobs then commit in the same transaction as fresh immutable operations, materialized records, Lamport-clock advancement, and replay-cursor advancement. Missing, extra, duplicate, reordered, truncated, tampered, wrong-profile, or wrong-signer data is rejected without partial state.
 - **Manual UI path:** the pairing panel distinguishes copyable text-only updates from a downloadable package containing attachments. Package download and import are explicit user actions; no endpoint, account, adapter, automatic transport, or background transfer is enabled.
 - **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 83 tests and `git diff --check` passed. The local browser loaded v2.8.0 over the existing profile, retained 8 messages and 3 attachments, displayed both package controls, downloaded a package with 3 encrypted attachments, re-imported it without duplicating operations, closed through Escape, retained all data after reload, and logged no warnings or errors.
+- **Production delivery:** implementation commit `2201948a517c98ecdceded5039b3b49ab279390b` was pushed and verified on `origin/main`. Production deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1` reached READY and the stable URL served v2.8.0. Production load/reload preserved its one hosted-origin message and produced no warnings or errors.
 - **Remaining risks:** manual packages still contain complete local-device operation history; blocking still lacks profile-key rotation; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
 - **Next recommended step:** implement profile-key rotation with durable device revocation, followed by content-free permanent-erasure markers, compaction, and offline/reconnect integration coverage before backend selection.
 
@@ -132,5 +133,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 - v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
 - v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
 - v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- v2.8.0 encrypted attachment-package implementation and local verification are complete; commit, push, deployment, and production verification are pending.
+- v2.8.0 encrypted attachment-package implementation, verification, commit/push, deployment, and production verification are complete.
 - Continue SC-20 with key rotation/revocation, permanent-erasure propagation, compaction, and integration tests; do not enable transport before those safeguards exist.
