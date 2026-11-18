@@ -14,8 +14,8 @@ This file is the persistent implementation-continuity record shared across Codex
 
 - **Implemented:** v2.5.0 local SC-20 foundation exists in the current working tree.
 - **Tested:** yes. All required syntax checks, 68 automated tests, `git diff --check`, and the browser persistence/error pass described below passed on 2026-11-18.
-- **Committed:** pending final verified milestone commit.
-- **Pushed:** pending final verified milestone push.
+- **Committed:** yes. Implementation commit `7267ab4` contains the v2.5.0 source, tests, decisions, backlog, and initial handoff report.
+- **Pushed:** yes. `origin/main` was verified at full commit `7267ab45ecfb95598c603ac758c6664d9d49cb37` after the push.
 - **Deployed:** no. Production intentionally remains v2.4.0; deployment requires explicit authorization.
 
 ## SC-20 local foundation — 2026-11-18
@@ -80,5 +80,5 @@ The user explicitly approved commit, push, and production deployment for v2.4.0 
 
 - No blocker is recorded for maintaining project context.
 - v2.4.0 release, push, deployment, and protected-production verification are complete.
-- Complete the v2.5.0 final verification, commit, and push records, but do not deploy without explicit authorization.
+- v2.5.0 implementation, verification, commit, and push are complete. Do not deploy without explicit authorization.
 - Continue SC-20 with encrypted envelopes, device enrollment, and backend-boundary design; do not add transport before those safeguards and tests exist.
