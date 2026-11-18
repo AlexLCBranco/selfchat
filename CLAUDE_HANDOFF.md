@@ -30,9 +30,17 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Remaining risks:** the deterministic last-writer rule is defined but remote validation/application is not implemented; unbounded operation retention and future compaction are unresolved; attachment bytes need encrypted chunk transfer and integrity checks; cross-device permanent-deletion propagation needs an encrypted tombstone design that does not conflict with local permanent-erasure guarantees.
 - **Next recommended step:** design and implement encrypted operation envelopes, authenticated device enrollment, and a minimal backend boundary before adding any transport. Keep remote application disabled until envelope validation, replay protection, deletion semantics, and attachment integrity tests pass.
 
+## Automatic deployment policy — 2026-11-18
+
+- Explicitly authorized SelfChat development tasks now carry standing authorization through implementation, required automated and browser verification, fixes, continuity updates, commit, push, deployment to the existing SelfChat Vercel production project, and production verification.
+- Automatic deployment is allowed only after all required tests pass, existing functionality and user data are preserved, no unresolved critical defects remain, and the release stays within the approved scope and existing production target.
+- Separate approval remains required for destructive or irreversible work; potentially erasing, corrupting, or incompatible data migrations; authentication, encryption, security, or privacy-boundary changes; cloud sync or transmission of existing messages; new infrastructure, credentials, paid services, unexpected costs, material architecture changes, and out-of-scope work.
+- Every persistent handoff must distinguish **Implemented**, **Tested**, **Committed**, **Pushed**, **Deployed**, and **Production verified**. A failed deployment must be reported while preserving the last working production version.
+- This policy supersedes the prior requirement for separate approval of each production deployment and does not authorize unrequested features.
+
 ## Prior continuity update — 2026-11-18
 
-- **Low-interruption development policy:** an explicitly authorized development task now carries standing authorization for autonomous implementation, testing, debugging, documentation, and routine commit/push synchronization to the existing SelfChat GitHub repository. Separate approval remains required for production deployment, destructive or user-data deletion operations, credentials or access changes, security-sensitive changes, unexpected costs, material architectural changes, and work outside the approved scope. Codex permission and sandbox restrictions remain binding.
+- **Low-interruption development policy:** an explicitly authorized development task carries standing authorization for autonomous implementation, testing, debugging, documentation, and routine commit/push synchronization to the existing SelfChat GitHub repository. Its separate-deployment-approval rule is superseded by the automatic deployment policy above for qualifying releases. Codex permission and sandbox restrictions remain binding.
 - **Repository synchronization:** the durable `AGENTS.md` rules now explicitly require milestone backlog updates, implementation-result and next-step handoffs, architectural decision records, approved report-inclusive commits and pushes, successful-push verification before claiming GitHub synchronization, and a strict separation between Git pushes and production deployments.
 - **Implemented:** repository guidance now makes `FEATURE_BACKLOG.md` and this handoff the durable cross-session records for development status and implementation continuity. `AGENTS.md`, `README.md`, and `DECISIONS.md` describe the same hierarchy and approval boundaries.
 - **Tested:** `git diff --check`, all repository-required syntax checks, all 59 automated tests, and the v2.4.0 browser parity pass passed.
@@ -40,7 +48,7 @@ This file is the persistent implementation-continuity record shared across Codex
 - **Pushed:** yes; `origin/main` includes `4b373c1`.
 - **Deployed:** yes; production deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY at the stable URL.
 - **Blockers:** none for the continuity workflow.
-- **Next step:** use these records in every future implementation; automatically commit and push completed, verified work within an explicitly authorized task, and obtain explicit approval before any production deployment or other approval-gated action.
+- **Next step:** use these records in every future implementation; automatically commit, push, deploy, and production-verify completed qualifying work within an explicitly authorized task, while obtaining explicit approval for the listed safeguard exceptions.
 
 ## Architecture and privacy boundary
 
@@ -74,7 +82,7 @@ The 2026-11-18 v2.4.0 browser pass served `http://127.0.0.1:47832` and confirmed
 - Reload succeeds again after the local server restarts.
 - No browser console warnings or errors were present.
 
-The user explicitly approved commit, push, and production deployment for v2.4.0 on 2026-11-18. Future explicitly authorized development tasks carry standing authorization for routine commits and pushes to the existing repository, while every production deployment still requires separate explicit authorization.
+The user explicitly approved commit, push, and production deployment for v2.4.0 on 2026-11-18. Future explicitly authorized development tasks carry standing authorization for routine commits, pushes, qualifying production deployments to the existing SelfChat Vercel project, and production verification.
 
 ## Current blockers and next steps
 

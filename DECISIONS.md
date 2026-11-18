@@ -117,7 +117,7 @@ Reason: this milestone strengthens local durability without expanding the privac
 
 ## 2026-11-08 — Explicit authorization for deployment and pushes
 
-**Superseded for routine commits and pushes by the 2026-11-18 low-interruption development authorization.** Production deployment still requires explicit authorization.
+**Superseded by the 2026-11-18 low-interruption development authorization for routine commits and pushes, and by the 2026-11-18 automatic production deployment authorization for qualifying releases.**
 
 Git pushes and production deployments require explicit user authorization. This replaces the 2026-11-05 standing production deployment authorization.
 
@@ -253,9 +253,9 @@ Reason: strengthening the existing buildless PWA foundation is reversible and pr
 
 ## 2026-11-18 — Repository-native development continuity
 
-**Updated by the 2026-11-18 low-interruption development authorization.** Routine commits and pushes for an explicitly authorized development task no longer require separate approval; deployment remains separately approval-gated.
+**Updated by the 2026-11-18 low-interruption development authorization and the later automatic production deployment authorization.** Routine commits, pushes, and qualifying deployments for an explicitly authorized development task no longer require separate approval.
 
-`FEATURE_BACKLOG.md` is the persistent source of truth for milestone status and remaining work, while `CLAUDE_HANDOFF.md` is the persistent source of truth for implementation details, verification results, blockers, and next steps. Live source remains authoritative for actual behavior, and this file remains authoritative for material product, architecture, privacy, storage, and deployment decisions. Every implementation updates both continuity files and reports Implemented, Tested, Committed, Pushed, and Deployed as separate states. Commits and pushes require approval, and deployments always require explicit approval.
+`FEATURE_BACKLOG.md` is the persistent source of truth for milestone status and remaining work, while `CLAUDE_HANDOFF.md` is the persistent source of truth for implementation details, verification results, blockers, next steps, and production verification. Live source remains authoritative for actual behavior, and this file remains authoritative for material product, architecture, privacy, storage, and deployment decisions. Every implementation updates both continuity files and reports Implemented, Tested, Committed, Pushed, Deployed, and Production verified as separate states.
 
 Reason: Codex and ChatGPT sessions must be able to continue from repository history without the user manually transferring implementation reports or risking confusion between local work and released work.
 
@@ -263,9 +263,21 @@ Reason: Codex and ChatGPT sessions must be able to continue from repository hist
 
 An explicitly authorized development task authorizes autonomous implementation, testing, debugging, documentation, and routine commits and pushes to the existing SelfChat GitHub repository. Separate confirmation is not required for ordinary commits or pushes within that scope. This standing authorization does not approve new features, production deployment, destructive operations, deletion of existing user data, credentials or access changes, security-sensitive changes, unexpected costs, material architectural changes, or bypassing Codex permission and sandbox restrictions.
 
-Production deployment remains a separate action that always requires explicit authorization. GitHub synchronization may be reported only after a successful push and remote-branch verification.
+This decision's requirement for separate production-deployment approval is superseded by the automatic production deployment authorization below. GitHub synchronization may be reported only after a successful push and remote-branch verification.
 
 Reason: approved milestones should proceed without repetitive workflow interruptions while preserving deliberate approval boundaries for scope expansion, risk, cost, architecture, sensitive access, data loss, and production release.
+
+## 2026-11-18 — Automatic production deployment authorization
+
+An explicitly authorized SelfChat development task authorizes Codex to implement the approved scope, run all required automated and browser checks, fix discovered issues, update the backlog and handoff, commit and push verified changes, deploy the completed milestone to the existing SelfChat Vercel production project, and verify production. Routine qualifying deployments do not require separate approval.
+
+Automatic deployment is permitted only when all required tests pass, existing functionality and user data are preserved, no unresolved critical defects remain, the release stays within the explicitly approved feature or milestone, and the target is the existing SelfChat Vercel project. A deployment failure must be reported without replacing the last working production version.
+
+Separate approval remains required for destructive or irreversible operations; changes that may erase, corrupt, or incompatibly migrate existing user data; authentication, encryption, security, or privacy-boundary changes; enabling cloud synchronization or transmitting existing message content; new infrastructure, credentials, paid services, or unexpected costs; material architectural changes; and work outside the authorized scope. Safe local work may continue for these exceptions, but Codex must report the approval needed rather than deploy automatically.
+
+Every task report and persistent GitHub handoff distinguishes Implemented, Tested, Committed, Pushed, Deployed, and Production verified. This decision supersedes the prior requirement for separate approval of every production deployment and does not authorize unrequested features.
+
+Reason: the production app is the user's working copy, and routine verified releases should reach it without an extra approval round while data, privacy, security, cost, architecture, and scope changes retain deliberate gates.
 
 ## 2026-11-18 — SC-20 local synchronization foundation
 
