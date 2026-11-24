@@ -1,15 +1,7 @@
-const STORAGE_KEY = "selfchat-data-v1";
-const RECOVERY_KEY = "selfchat-recovery-v1";
-const ACTIVE_TAB_KEY = "selfchat-active-tab-v1";
-const DRAFT_BUFFER_KEY = "selfchat-draft-buffer-v1";
-const TAB_CHANNEL_NAME = "selfchat-tab-ownership-v1";
+const ACTIVE_CHAT_KEY = "selfchat-active-chat-v1";
 const SPLIT_VIEW_KEY = "selfchat-split-view-v1";
 const GLOBAL_VIEW_KEY = "selfchat-global-view-v1";
-const GLOBAL_HIDDEN_CHATS_KEY = "selfchat-global-hidden-chats-v1";
-const IMAGE_DB_NAME = "selfchat-images-v1";
-const IMAGE_STORE = "images";
-const RECOVERY_DB_NAME = "selfchat-snapshots-v1";
-const RECOVERY_STORE = "snapshots";
+const LAST_EXPORT_KEY = "selfchat-last-export-v1";
 const MAX_RECOVERY_SNAPSHOTS = 30;
 const EMOJIS = ["💬", "🏀", "⚽", "🤖", "💻", "🎬", "🎮", "🎵", "📚", "💡", "🧠", "🔥", "🧾", "👀", "🗑️", "🌍"];
 const STICKERS = [
@@ -26,25 +18,13 @@ const STICKERS = [
   { id: "salute", emoji: "🫡", label: "Salute", tone: "blue" },
   { id: "dead", emoji: "💀", label: "I'm dead", tone: "gray" }
 ];
-const DEFAULT_STATE = {
-  activeChatId: "nba",
-  chats: [
-    { id: "nba", name: "NBA", emoji: "🏀", createdAt: "2026-01-01T00:00:02.000Z" },
-    { id: "ai", name: "Claude / Codex", emoji: "🤖", createdAt: "2026-01-01T00:00:01.000Z" },
-    { id: "soccer", name: "Soccer", emoji: "⚽", createdAt: "2026-01-01T00:00:00.000Z" }
-  ],
-  messages: [],
-  customStickers: [],
-  trash: [],
-  deletedChatIds: [],
-  deletedMessageIds: [],
-  drafts: {}
-};
+// Built-in default chats are created by the server only on a verified first run.
+const EMPTY_STATE = { chats: [], messages: [], customStickers: [], trash: [], deletedChatIds: [], deletedMessageIds: [], drafts: {} };
 
 const $ = selector => document.querySelector(selector);
 const elements = {
-  app: $("#app"), singleTabScreen: $("#singleTabScreen"), singleTabHint: $("#singleTabHint"),
-  closeThisTabButton: $("#closeThisTabButton"), useThisTabButton: $("#useThisTabButton"),
+  app: $("#app"), storageScreen: $("#storageScreen"), storageScreenTitle: $("#storageScreenTitle"), storageScreenMessage: $("#storageScreenMessage"),
+  storageScreenPath: $("#storageScreenPath"), storageRetryButton: $("#storageRetryButton"),
   chatList: $("#chatList"), activeChatAvatar: $("#activeChatAvatar"), activeChatName: $("#activeChatName"), activeChatNameInput: $("#activeChatNameInput"),
   conversationSubtitle: $("#conversationSubtitle"), messageSearchButton: $("#messageSearchButton"), chatMenuButton: $("#chatMenuButton"), keyboardHint: $("#keyboardHint"),
   globalVisibilityButton: $("#globalVisibilityButton"), globalVisibilityDialog: $("#globalVisibilityDialog"), globalVisibilityList: $("#globalVisibilityList"),
@@ -80,28 +60,33 @@ const elements = {
   avatarEmojiPicker: $("#avatarEmojiPicker"), avatarEditorPreview: $("#avatarEditorPreview"), avatarImageInput: $("#avatarImageInput"),
   removeAvatarImageButton: $("#removeAvatarImageButton"),
   settingsDialog: $("#settingsDialog"), contextMenu: $("#messageContextMenu"), chatContextMenu: $("#chatContextMenu"), toast: $("#toast"), importInput: $("#importInput"),
-  pairingDialog: $("#pairingDialog"), pairingDeviceLabel: $("#pairingDeviceLabel"), pairingInputText: $("#pairingInputText"),
-  pairingOutput: $("#pairingOutput"), pairingOutputTitle: $("#pairingOutputTitle"), pairingOutputText: $("#pairingOutputText"),
-  pairingVerificationCode: $("#pairingVerificationCode"), pairingResult: $("#pairingResult"), authorizedDeviceList: $("#authorizedDeviceList"),
-  syncDeviceStatus: $("#syncDeviceStatus"), encryptedPackageInput: $("#encryptedPackageInput"),
   recoveryList: $("#recoveryList"), recoveryStatus: $("#recoveryStatus"),
   storageDiagnostics: $("#storageDiagnostics"), recoveryPreviewDialog: $("#recoveryPreviewDialog"), recoveryPreviewSummary: $("#recoveryPreviewSummary"),
   trashDialog: $("#trashDialog"), trashList: $("#trashList"), trashCount: $("#trashCount"), emptyTrashButton: $("#emptyTrashButton"),
   moveDialog: $("#moveMessagesDialog"), moveForm: $("#moveMessagesForm"), moveTitle: $("#moveMessagesTitle"), moveDestination: $("#moveDestinationSelect"), confirmMoveButton: $("#confirmMoveButton"),
   imageViewerDialog: $("#imageViewerDialog"), imageViewerImage: $("#imageViewerImage"), imageViewerTitle: $("#imageViewerTitle"),
   imageViewerTime: $("#imageViewerTime"), imageViewerCaption: $("#imageViewerCaption"),
-  originStatus: $("#originStatus"), persistenceStatus: $("#persistenceStatus"), automaticBackupStatus: $("#automaticBackupStatus"),
-  exportStatus: $("#exportStatus"), dataStatusWarning: $("#dataStatusWarning"), automaticBackupFolderButton: $("#automaticBackupFolderButton"),
+  dataFolderStatus: $("#dataFolderStatus"), integrityStatus: $("#integrityStatus"), messageCountStatus: $("#messageCountStatus"),
+  backupStatus: $("#backupStatus"), dataStatusWarning: $("#dataStatusWarning"), backupFolderButton: $("#backupFolderButton"),
+  backupFolderDialog: $("#backupFolderDialog"), backupFolderForm: $("#backupFolderForm"), backupFolderInput: $("#backupFolderInput"), backupFolderError: $("#backupFolderError"),
   offlineAppStatus: $("#offlineAppStatus"), installAppButton: $("#installAppButton"), installAppHelp: $("#installAppHelp"),
   confirmationDialog: $("#confirmationDialog"), confirmationForm: $("#confirmationForm"), confirmationTitle: $("#confirmationTitle"),
   confirmationMessage: $("#confirmationMessage"), confirmActionButton: $("#confirmActionButton"),
   replyComposerPreview: $("#replyComposerPreview"), replyComposerText: $("#replyComposerText")
 };
 
-let state = loadLegacyState();
-let persistedState = structuredClone(state);
-let repository = null;
-let storageMode = "legacy";
+let state = structuredClone(EMPTY_STATE);
+let persistedState = structuredClone(EMPTY_STATE);
+let serverSeq = 0;
+let serverStatus = null;
+let serverReachable = true;
+let eventSource = null;
+let eventsWereLost = false;
+let appBlocked = true;
+let commitQueue = Promise.resolve();
+let seqWaiters = [];
+const pendingRecords = new Map();
+const pendingDeletes = { chats: new Set(), messages: new Set(), customStickers: new Set(), trash: new Set() };
 let draftSaveTimer = null;
 let selectedEmoji = EMOJIS[0];
 let contextMessageId = null;
@@ -126,16 +111,9 @@ let viewerMessageId = null;
 let viewerObjectUrl = null;
 let viewerLoadToken = 0;
 const tabId = uid();
-const tabChannel = "BroadcastChannel" in window ? new BroadcastChannel(TAB_CHANNEL_NAME) : null;
-let tabIsBlocked = false;
-let lastRecoverySignature = null;
 let messageSearchIndex = 0;
 let focusedMessageId = null;
 let recoveryPreviewSnapshot = null;
-let storagePersisted = null;
-let storageWarning = "";
-let automaticBackupTimer = null;
-let automaticBackupRunning = false;
 let confirmationResolver = null;
 let renamingChatId = null;
 let inlineEditingMessageId = null;
@@ -153,111 +131,13 @@ let pendingNewChatAvatarUrl = null;
 let avatarDraft = null;
 let avatarDraftUrl = null;
 
-function activeTabId() {
-  try {
-    return JSON.parse(localStorage.getItem(ACTIVE_TAB_KEY))?.tabId || null;
-  } catch (_) {
-    return null;
-  }
-}
-
-function closeOpenUi() {
-  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
-  elements.dropOverlay.hidden = true;
-  closeStickerPanel();
-  closeContextMenu();
-}
-
-function blockThisTab() {
-  if (tabIsBlocked) return;
-  tabIsBlocked = true;
-  closeOpenUi();
-  elements.app.inert = true;
-  elements.singleTabHint.textContent = "";
-  elements.closeThisTabButton.textContent = "Close tab";
-  elements.singleTabScreen.hidden = false;
-  requestAnimationFrame(() => elements.useThisTabButton.focus());
-}
-
-async function claimThisTab() {
-  localStorage.setItem(ACTIVE_TAB_KEY, JSON.stringify({ tabId, claimedAt: Date.now() }));
-  tabChannel?.postMessage({ type: "claim", tabId });
-  tabIsBlocked = false;
-  elements.singleTabScreen.hidden = true;
-  elements.app.inert = false;
-  await initializeStorage();
-  restoreSplitView();
-  renderStickerGrid();
-  render();
-  elements.messageInput.value = state.drafts[state.activeChatId] || "";
-  resizeComposer();
-  updateComposerState();
-  await openLinkedMessageFromLocation();
-  elements.messageInput.focus();
-}
-
-function honorCurrentTabOwner(candidateId) {
-  queueMicrotask(() => {
-    const ownerId = activeTabId();
-    if (ownerId && ownerId !== tabId && (!candidateId || candidateId === ownerId)) blockThisTab();
-  });
-}
-
-function readStoredState(key) {
-  try {
-    const value = JSON.parse(localStorage.getItem(key));
-    return value && Array.isArray(value.chats) && Array.isArray(value.messages) ? value : null;
-  } catch (_) {}
-  return null;
-}
-
-function readDraftBuffers() {
-  try {
-    const value = JSON.parse(localStorage.getItem(DRAFT_BUFFER_KEY));
-    return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-  } catch (_) { return {}; }
-}
-
-function readLegacyGlobalHiddenChatIds() {
-  try {
-    const value = JSON.parse(localStorage.getItem(GLOBAL_HIDDEN_CHATS_KEY));
-    return Array.isArray(value) ? value.filter(id => typeof id === "string") : [];
-  } catch (_) { return []; }
-}
-
-function normalizeGlobalHiddenChatIds(value) {
-  const activeIds = new Set(state.chats.map(chat => chat.id));
-  const candidates = Array.isArray(value) ? value : value instanceof Set ? [...value] : [];
-  return new Set(candidates.filter(id => typeof id === "string" && activeIds.has(id)));
-}
-
-async function persistGlobalVisibility() {
-  hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(hiddenGlobalChatIds);
-  const value = [...hiddenGlobalChatIds];
-  if (repository) {
-    await repository.setMeta("globalHiddenChatIds", value);
-    localStorage.removeItem(GLOBAL_HIDDEN_CHATS_KEY);
-  } else {
-    localStorage.setItem(GLOBAL_HIDDEN_CHATS_KEY, JSON.stringify(value));
-  }
-}
-
-function setDraftBuffer(chatId, text) {
-  const buffers = readDraftBuffers();
-  buffers[chatId] = { text, updatedAt: new Date().toISOString() };
-  localStorage.setItem(DRAFT_BUFFER_KEY, JSON.stringify(buffers));
-}
-
-function clearDraftBuffer(chatId, expectedText) {
-  const buffers = readDraftBuffers();
-  if (!buffers[chatId] || buffers[chatId].text !== expectedText) return;
-  delete buffers[chatId];
-  if (Object.keys(buffers).length) localStorage.setItem(DRAFT_BUFFER_KEY, JSON.stringify(buffers));
-  else localStorage.removeItem(DRAFT_BUFFER_KEY);
-}
+// ---- Server-backed storage -------------------------------------------------
+// The local SelfChat server is the only writer. The browser keeps no authoritative copy:
+// `persistedState` mirrors what the server has acknowledged, `state` is what is on screen.
+// A change counts as saved only after the server has written it to disk and replied.
 
 function normalizeState(value) {
-  const normalized = SelfChatStorageCore.normalizeState(value, DEFAULT_STATE);
+  const normalized = SelfChatStorageCore.normalizeState(value, EMPTY_STATE);
   normalized.chats = Array.isArray(normalized.chats) ? normalized.chats : [];
   normalized.messages = Array.isArray(normalized.messages) ? normalized.messages : [];
   normalized.customStickers = normalizeCustomStickers(normalized.customStickers);
@@ -268,264 +148,300 @@ function normalizeState(value) {
   return normalized;
 }
 
-function mergeStates(values, preferred = values.at(-1)) {
-  return SelfChatStorageCore.mergeStates(values, preferred, DEFAULT_STATE);
+function normalizeGlobalHiddenChatIds(value) {
+  const activeIds = new Set(state.chats.map(chat => chat.id));
+  const candidates = Array.isArray(value) ? value : value instanceof Set ? [...value] : [];
+  return new Set(candidates.filter(id => typeof id === "string" && activeIds.has(id)));
 }
 
-function loadLegacyState() {
-  const stored = readStoredState(STORAGE_KEY);
-  const recovery = readStoredState(RECOVERY_KEY);
-  const merged = mergeStates([recovery, stored], stored || recovery);
-  return merged.chats.length ? merged : structuredClone(DEFAULT_STATE);
+function rememberActiveChat() {
+  if (state.activeChatId) localStorage.setItem(ACTIVE_CHAT_KEY, state.activeChatId);
 }
 
-function recoverySignature(value) {
-  return JSON.stringify({
-    chats: value.chats,
-    messages: value.messages,
-    customStickers: value.customStickers,
-    trash: value.trash,
-    deletedChatIds: value.deletedChatIds,
-    deletedMessageIds: value.deletedMessageIds
-  });
+function attachmentIndex() {
+  return persistedState.attachments || {};
 }
 
-function changedRecords(before, after, key = "id") {
-  const previous = new Map(before.map(item => [item[key], item]));
-  const next = new Map(after.map(item => [item[key], item]));
-  return {
-    put: after.filter(item => JSON.stringify(item) !== JSON.stringify(previous.get(item[key]))),
-    remove: before.filter(item => !next.has(item[key])).map(item => item[key])
-  };
-}
-
-function stateDiff(before, after, attachmentsPut = [], attachmentsDelete = []) {
-  const chats = changedRecords(before.chats, after.chats);
-  const messages = changedRecords(before.messages, after.messages);
-  const stickers = changedRecords(before.customStickers, after.customStickers);
-  const trash = changedRecords(before.trash || [], after.trash || []);
-  const draftIds = new Set([...Object.keys(before.drafts || {}), ...Object.keys(after.drafts || {})]);
-  const draftsPut = [];
-  const draftsDelete = [];
-  draftIds.forEach(chatId => {
-    const previous = before.drafts?.[chatId] || "";
-    const next = after.drafts?.[chatId] || "";
-    if (previous === next) return;
-    if (next) draftsPut.push({ chatId, text: next, updatedAt: new Date().toISOString() });
-    else draftsDelete.push(chatId);
-  });
-  return {
-    chatsPut: chats.put, chatsDelete: chats.remove,
-    messagesPut: messages.put, messagesDelete: messages.remove,
-    stickersPut: stickers.put, stickersDelete: stickers.remove,
-    draftsPut, draftsDelete,
-    trashPut: trash.put, trashDelete: trash.remove,
-    attachmentsPut, attachmentsDelete,
-    activeChatId: after.activeChatId
-  };
-}
-
-function diffHasContent(diff) {
-  return Object.entries(diff).some(([key, value]) => key !== "activeChatId" && Array.isArray(value) && value.length);
-}
-
-async function saveState({ significant = true, attachmentsPut = [], attachmentsDelete = [] } = {}) {
-  state = normalizeState(state);
-  if (repository) {
-    const before = structuredClone(persistedState);
-    const target = structuredClone(state);
-    const diff = stateDiff(before, target, attachmentsPut, attachmentsDelete);
-    try {
-      if (diffHasContent(diff) || target.activeChatId !== persistedState.activeChatId) {
-        await repository.commit(diff, { significant, snapshotState: before });
-      }
-    } catch (error) {
-      state = structuredClone(persistedState);
-      throw error;
-    }
-    persistedState = target;
-  } else {
-    const serialized = JSON.stringify(state);
-    try { localStorage.setItem(RECOVERY_KEY, serialized); } catch (_) {}
-    localStorage.setItem(STORAGE_KEY, serialized);
-  }
-  if (significant) queueAutomaticBackup();
-}
-
-async function initializeStorage() {
+async function api(path, { method = "GET", body, headers = {}, keepalive = false } = {}) {
+  const isJson = body !== undefined && !(body instanceof Blob) && typeof body !== "string";
+  let response;
   try {
-    if (!repository) repository = await SelfChatStorage.open({
-      storageKey: STORAGE_KEY,
-      recoveryKey: RECOVERY_KEY,
-      defaultState: DEFAULT_STATE,
-      loadLegacyState,
-      getAllImages,
-      getRecoverySnapshots
+    response = await fetch(path, {
+      method,
+      cache: "no-store",
+      keepalive,
+      headers: { ...(method === "GET" ? {} : { "X-SelfChat": "1" }), ...(isJson ? { "Content-Type": "application/json" } : {}), ...headers },
+      body: isJson ? JSON.stringify(body) : body
     });
-    state = repository.initialState || await repository.load();
-    persistedState = structuredClone(state);
-    const storedHiddenChatIds = repository.metadata.globalHiddenChatIds ?? readLegacyGlobalHiddenChatIds();
-    hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(storedHiddenChatIds);
-    if (hiddenGlobalChatIds.size !== (Array.isArray(storedHiddenChatIds) ? storedHiddenChatIds.length : 0) || !repository.metadata.globalHiddenChatIds && hiddenGlobalChatIds.size) {
-      await persistGlobalVisibility();
+  } catch (_) {
+    setServerReachable(false);
+    const error = new Error("The SelfChat server is not reachable. Nothing was saved.");
+    error.code = "UNREACHABLE";
+    throw error;
+  }
+  setServerReachable(true);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error(data?.error?.message || `SelfChat server error ${response.status}`);
+    error.status = response.status;
+    error.code = data?.error?.code || null;
+    throw error;
+  }
+  return data;
+}
+
+function setServerReachable(reachable) {
+  if (serverReachable === reachable) return;
+  serverReachable = reachable;
+  renderDataStatus();
+  if (!reachable) showToast("SelfChat server is not reachable — changes are not being saved", 6000);
+}
+
+function applyRecordToState(target, record) {
+  SelfChatStoreCore.applyOpsToState(target, record.ops);
+}
+
+function acceptRecord(record) {
+  if (!record || record.seq <= serverSeq) return;
+  pendingRecords.set(record.seq, record);
+  let remoteChange = false;
+  while (pendingRecords.has(serverSeq + 1)) {
+    const next = pendingRecords.get(serverSeq + 1);
+    pendingRecords.delete(next.seq);
+    applyRecordToState(persistedState, next);
+    if (next.origin !== tabId) {
+      applyRecordToState(state, next);
+      remoteChange = true;
     }
-    storageMode = "indexeddb";
-    storageWarning = "";
-    const buffers = readDraftBuffers();
-    if (Object.keys(buffers).length) {
-      Object.entries(buffers).forEach(([chatId, buffer]) => {
-        if (state.chats.some(chat => chat.id === chatId) && typeof buffer?.text === "string") state.drafts[chatId] = buffer.text;
-      });
-      await saveState({ significant: false });
-      Object.entries(buffers).forEach(([chatId, buffer]) => clearDraftBuffer(chatId, buffer.text));
+    serverSeq = next.seq;
+    if (serverStatus) {
+      serverStatus.seq = serverSeq;
+      serverStatus.integrity.records = serverSeq;
     }
-    storagePersisted = navigator.storage?.persist ? await navigator.storage.persist().catch(() => false) : false;
-    await refreshDataStatus();
-    await runAutomaticBackup("startup");
+  }
+  seqWaiters = seqWaiters.filter(waiter => {
+    if (serverSeq < waiter.seq) return true;
+    waiter.resolve();
+    return false;
+  });
+  if (pendingRecords.size) scheduleGapFill();
+  if (remoteChange) scheduleRemoteRender();
+  renderDataStatus();
+}
+
+function waitForSeq(seq) {
+  if (serverSeq >= seq) return Promise.resolve();
+  scheduleGapFill();
+  return new Promise(resolve => seqWaiters.push({ seq, resolve }));
+}
+
+let gapFillTimer = null;
+function scheduleGapFill() {
+  if (gapFillTimer) return;
+  gapFillTimer = setTimeout(async () => {
+    gapFillTimer = null;
+    try {
+      const { records } = await api(`/api/records?after=${serverSeq}`);
+      records.forEach(acceptRecord);
+    } catch (_) {}
+  }, 400);
+}
+
+let remoteRenderQueued = false;
+function scheduleRemoteRender() {
+  if (remoteRenderQueued) return;
+  remoteRenderQueued = true;
+  requestAnimationFrame(() => {
+    remoteRenderQueued = false;
+    state = normalizeState(state);
+    hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(persistedState.meta?.globalHiddenChatIds || []);
+    if (!state.chats.some(chat => chat.id === state.activeChatId)) state.activeChatId = state.chats[0]?.id;
+    renderStickerGrid();
+    renderChats();
+    if (globalViewOpen) renderGlobalConversation({ scroll: false });
+    else if (!inlineEditingMessageId) {
+      renderMessages({ scroll: "preserve" });
+      renderPinnedMessageBanner();
+      updateSavedMessageCount();
+      updateMediaGalleryCount();
+      renderSplitConversation();
+    }
+    if (elements.trashDialog.open) renderTrash();
+  });
+}
+
+function connectEvents() {
+  eventSource?.close();
+  eventSource = new EventSource(`/api/events?after=${serverSeq}`);
+  eventSource.onmessage = event => {
+    try { acceptRecord(JSON.parse(event.data)); } catch (_) {}
+  };
+  eventSource.onerror = () => {
+    eventsWereLost = true;
+    setServerReachable(false);
+  };
+  eventSource.onopen = async () => {
+    setServerReachable(true);
+    if (!eventsWereLost) return;
+    eventsWereLost = false;
+    const status = await api("/api/status").catch(() => null);
+    if (status && (!status.ok || status.seq < serverSeq || status.dataDir !== serverStatus?.dataDir)) location.reload();
+    else if (status) { serverStatus = status; renderDataStatus(); }
+  };
+}
+
+function rollbackToPersisted() {
+  const activeChatId = state.activeChatId;
+  state = normalizeState(structuredClone(persistedState));
+  if (state.chats.some(chat => chat.id === activeChatId)) state.activeChatId = activeChatId;
+  Object.values(pendingDeletes).forEach(ids => ids.clear());
+  requestAnimationFrame(() => {
+    renderStickerGrid();
+    render();
+  });
+}
+
+// Saves the difference between the screen and the server as explicit operations.
+// Records that disappeared are deleted only if the calling user action declared them.
+function saveState({ deletes = {}, label = null } = {}) {
+  Object.entries(deletes).forEach(([store, ids]) => (ids || []).forEach(id => pendingDeletes[store]?.add(id)));
+  const run = commitQueue.then(() => commitChanges(label));
+  commitQueue = run.catch(() => {});
+  return run;
+}
+
+async function commitChanges(label) {
+  state = normalizeState(state);
+  rememberActiveChat();
+  let ops;
+  try {
+    ops = SelfChatStoreCore.operationsForChange(persistedState, state, pendingDeletes);
   } catch (error) {
-    console.error("IndexedDB migration unavailable; continuing with legacy storage", error);
-    repository = null;
-    storageMode = "legacy";
-    state = error.legacyState || loadLegacyState();
-    persistedState = structuredClone(state);
-    hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(readLegacyGlobalHiddenChatIds());
-    Object.entries(readDraftBuffers()).forEach(([chatId, buffer]) => {
-      if (state.chats.some(chat => chat.id === chatId) && typeof buffer?.text === "string") state.drafts[chatId] = buffer.text;
-    });
-    storageWarning = `Unified storage migration failed: ${error.message}. v0.9.2 data remains active and will retry next time.`;
-    await refreshDataStatus();
-    showToast("Migration failed; your v0.9.2 data is still active", 6000);
+    console.error(error);
+    rollbackToPersisted();
+    throw error;
+  }
+  if (!ops.length) return null;
+  try {
+    const { record } = await api("/api/commit", { method: "POST", body: { ops, origin: tabId, ...(label ? { label } : {}) } });
+    acceptRecord(record);
+    ops.filter(op => op.op === "delete").forEach(op => pendingDeletes[op.store]?.delete(op.id));
+    return record;
+  } catch (error) {
+    rollbackToPersisted();
+    throw error;
   }
 }
 
-function openRecoveryDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(RECOVERY_DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(RECOVERY_STORE, { keyPath: "id" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+async function persistGlobalVisibility() {
+  hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(hiddenGlobalChatIds);
+  const value = [...hiddenGlobalChatIds];
+  if (JSON.stringify(value) === JSON.stringify(persistedState.meta?.globalHiddenChatIds || [])) return;
+  const { record } = await api("/api/commit", { method: "POST", body: { ops: [{ op: "meta", key: "globalHiddenChatIds", value }], origin: tabId } });
+  acceptRecord(record);
 }
 
-async function withRecoveryStore(mode, operation) {
-  const db = await openRecoveryDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(RECOVERY_STORE, mode);
-    const store = transaction.objectStore(RECOVERY_STORE);
-    let result;
-    try {
-      result = operation(store);
-    } catch (error) {
-      db.close();
-      reject(error);
-      return;
-    }
-    transaction.oncomplete = () => { db.close(); resolve(result?.result); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
-    transaction.onabort = () => { db.close(); reject(transaction.error || new Error("Recovery storage was interrupted")); };
-  });
+function flushDraftsOnExit() {
+  clearTimeout(draftSaveTimer);
+  if (appBlocked) return;
+  let ops = [];
+  try { ops = SelfChatStoreCore.operationsForChange(persistedState, normalizeState(state), pendingDeletes).filter(op => op.op === "draft"); } catch (_) {}
+  if (!ops.length) return;
+  void api("/api/commit", { method: "POST", body: { ops, origin: tabId }, keepalive: true }).catch(() => {});
+}
+
+// Attachments are written and verified on disk before any message refers to them.
+async function uploadAttachment(record) {
+  const blob = record.blob;
+  const params = new URLSearchParams({ id: record.id, name: record.name || "", type: blob?.type || "", origin: tabId });
+  const result = await api(`/api/attachments?${params}`, { method: "POST", body: blob, headers: { "Content-Type": blob?.type || "application/octet-stream" } });
+  if (result.record) acceptRecord(result.record);
+  return result.attachment;
+}
+
+async function getImage(id) {
+  const response = await fetch(`/api/attachments/${encodeURIComponent(id)}`);
+  if (!response.ok) return null;
+  return { id, name: attachmentIndex()[id]?.name || "Attachment", blob: await response.blob() };
 }
 
 function getRecoverySnapshots() {
-  if (repository) return repository.listSnapshots();
-  return withRecoveryStore("readonly", store => store.getAll());
+  return api("/api/recovery-points").then(result => result.points);
 }
 
-async function createRecoverySnapshot(label = "Automatic recovery point", value = state, { force = false } = {}) {
-  if (repository) return;
-  const snapshotState = normalizeState(value);
-  const signature = recoverySignature(snapshotState);
-  if (!force && signature === lastRecoverySignature) return;
-  const snapshots = await getRecoverySnapshots().catch(() => []);
-  const now = new Date();
-  const record = {
-    id: `${now.toISOString()}-${uid()}`,
-    createdAt: now.toISOString(),
-    label,
-    messageCount: snapshotState.messages.length,
-    chatCount: snapshotState.chats.length,
-    state: snapshotState
-  };
-  await withRecoveryStore("readwrite", store => {
-    store.put(record);
-    snapshots
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
-      .slice(MAX_RECOVERY_SNAPSHOTS - 1)
-      .forEach(snapshot => store.delete(snapshot.id));
-  });
-  lastRecoverySignature = signature;
+function showStorageScreen({ title, message = "", path = "", retry = false }) {
+  appBlocked = true;
+  closeOpenUi();
+  elements.app.inert = true;
+  elements.storageScreenTitle.textContent = title;
+  elements.storageScreenMessage.textContent = message;
+  elements.storageScreenMessage.hidden = !message;
+  elements.storageScreenPath.textContent = path ? `Data folder: ${path}` : "";
+  elements.storageRetryButton.hidden = !retry;
+  elements.storageScreen.hidden = false;
 }
 
-function openImageDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(IMAGE_DB_NAME, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore(IMAGE_STORE, { keyPath: "id" });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
+function hideStorageScreen() {
+  elements.storageScreen.hidden = true;
+  elements.app.hidden = false;
+  elements.app.inert = false;
+  appBlocked = false;
 }
 
-async function withImageStore(mode, operation) {
-  const db = await openImageDb();
-  return new Promise((resolve, reject) => {
-    const transaction = db.transaction(IMAGE_STORE, mode);
-    const store = transaction.objectStore(IMAGE_STORE);
-    let result;
-    try {
-      result = operation(store);
-    } catch (error) {
-      db.close();
-      reject(error);
-      return;
-    }
-    transaction.oncomplete = () => { db.close(); resolve(result?.result); };
-    transaction.onerror = () => { db.close(); reject(transaction.error); };
-    transaction.onabort = () => { db.close(); reject(transaction.error || new Error("Image storage was interrupted")); };
-  });
+function closeOpenUi() {
+  document.querySelectorAll("dialog[open]").forEach(dialog => dialog.close());
+  elements.dropOverlay.hidden = true;
+  closeStickerPanel();
+  closeContextMenu();
 }
 
-function putImage(record) {
-  if (repository) return repository.commit({ attachmentsPut: [record] }, { significant: false });
-  return withImageStore("readwrite", store => store.put(record));
+// Loads everything from the server. Never substitutes an empty or default state:
+// if the data cannot be read, a blocking screen explains why.
+async function loadFromServer() {
+  let response;
+  try {
+    response = await fetch("/api/state", { cache: "no-store" });
+  } catch (_) {
+    showStorageScreen({ title: "SelfChat is not running", message: "The SelfChat server on this PC is not reachable, so your chats cannot be shown. Start it with “Start SelfChat.cmd”, then try again.", retry: true });
+    return false;
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok || !body?.state) {
+    const error = body?.error || {};
+    showStorageScreen({
+      title: "Your SelfChat data could not be opened",
+      message: `${error.message || `The server answered with an error (${response.status}).`} Nothing has been changed. SelfChat will not show an empty chat list while your data folder has a problem.`,
+      path: error.dataDir || body?.status?.dataDir || "",
+      retry: true
+    });
+    return false;
+  }
+  persistedState = normalizeState(body.state);
+  persistedState.meta = body.state.meta || {};
+  persistedState.attachments = body.state.attachments || {};
+  state = normalizeState(structuredClone(body.state));
+  delete state.meta;
+  delete state.attachments;
+  const rememberedChatId = localStorage.getItem(ACTIVE_CHAT_KEY);
+  if (state.chats.some(chat => chat.id === rememberedChatId)) state.activeChatId = rememberedChatId;
+  persistedState.activeChatId = state.activeChatId;
+  serverSeq = body.seq;
+  serverStatus = body.status;
+  hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(persistedState.meta.globalHiddenChatIds || []);
+  connectEvents();
+  hideStorageScreen();
+  renderDataStatus();
+  if (serverStatus.firstRun) showToast(`New data folder created: ${serverStatus.dataDir}`, 8000);
+  return true;
 }
 
-function getImage(id) {
-  if (repository) return repository.getAttachment(id);
-  return withImageStore("readonly", store => store.get(id));
+async function refreshServerStatus() {
+  try {
+    serverStatus = await api("/api/status");
+  } catch (_) {}
+  renderDataStatus();
 }
 
-function getAllImages() {
-  if (repository) return repository.getAllAttachments();
-  return withImageStore("readonly", store => store.getAll());
-}
-
-function deleteImages(ids) {
-  if (!ids.length) return Promise.resolve();
-  if (repository) return repository.commit({ attachmentsDelete: ids }, { significant: false });
-  return withImageStore("readwrite", store => ids.forEach(id => store.delete(id)));
-}
-
-function addImages(records) {
-  if (!records.length) return Promise.resolve();
-  if (repository) return repository.commit({ attachmentsPut: records }, { significant: false });
-  return withImageStore("readwrite", store => records.forEach(record => store.put(record)));
-}
-
-function blobToDataUrl(blob) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
-
-function dataUrlToBlob(value) {
-  const match = /^data:([^;,]+);base64,([\s\S]+)$/.exec(value || "");
-  if (!match) throw new Error("Invalid image data");
-  const bytes = Uint8Array.from(atob(match[2]), character => character.charCodeAt(0));
-  return new Blob([bytes], { type: match[1] });
-}
 
 async function clipboardImageBlob(blob) {
   if (!blob?.type?.startsWith("image/")) throw new Error("Image data is unavailable");
@@ -645,69 +561,24 @@ function formatStatusTime(value) {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
 }
 
-async function buildBackupPayload() {
-  const records = await getAllImages();
-  const referenced = SelfChatStorageCore.referencedAttachmentIds(state);
-  const attachments = await Promise.all(records.filter(record => referenced.has(record.id)).map(async record => ({
-    id: record.id,
-    name: record.name || "Attachment",
-    type: record.blob?.type || "application/octet-stream",
-    data: await blobToDataUrl(record.blob)
-  })));
-  return SelfChatStorageCore.backupPayload(state, attachments);
-}
-
-async function refreshDataStatus() {
-  const originLabel = location.origin.includes("127.0.0.1") || location.origin.includes("localhost") ? "Local launcher" : "Hosted site";
-  elements.originStatus.textContent = `Origin: ${originLabel} (${location.origin}) · separate dataset`;
-  elements.persistenceStatus.textContent = `Storage persisted: ${storagePersisted === null ? "checking…" : storagePersisted ? "Yes" : "No"}`;
-  const lastAutomaticBackup = repository ? await repository.getMeta("lastAutomaticBackup").catch(() => null) : null;
-  const lastExport = repository ? await repository.getMeta("lastExport").catch(() => null) : localStorage.getItem("selfchat-last-export-v1");
-  elements.automaticBackupStatus.textContent = `Automatic backup: ${formatStatusTime(lastAutomaticBackup)}`;
-  elements.exportStatus.textContent = `Last export: ${formatStatusTime(lastExport)}`;
-  let warning = storageWarning;
-  if (!warning && !("showDirectoryPicker" in window)) warning = "Automatic folder backup is not supported by this browser.";
-  if (!warning && repository) {
-    const handle = await repository.getMeta("backupDirectoryHandle").catch(() => null);
-    if (!handle) warning = "Choose an automatic backup folder in Data settings.";
-    else {
-      const permission = await handle.queryPermission?.({ mode: "readwrite" }).catch(() => "denied");
-      if (permission !== "granted") warning = "Automatic backup folder permission was lost. Choose the folder again.";
-    }
-  }
-  elements.dataStatusWarning.textContent = warning;
-  elements.dataStatusWarning.hidden = !warning;
-}
-
-async function runAutomaticBackup(reason = "change") {
-  if (!repository || automaticBackupRunning || !("showDirectoryPicker" in window)) return refreshDataStatus();
-  const handle = await repository.getMeta("backupDirectoryHandle").catch(() => null);
-  if (!handle) return refreshDataStatus();
-  const permission = await handle.queryPermission?.({ mode: "readwrite" }).catch(() => "denied");
-  if (permission !== "granted") return refreshDataStatus();
-  const last = await repository.getMeta("lastAutomaticBackup").catch(() => null);
-  if (reason === "startup" && last?.slice(0, 10) === new Date().toISOString().slice(0, 10)) return refreshDataStatus();
-  automaticBackupRunning = true;
-  try {
-    const payload = await buildBackupPayload();
-    const file = await handle.getFileHandle("SelfChat automatic backup.json", { create: true });
-    const writable = await file.createWritable();
-    await writable.write(JSON.stringify(payload, null, 2));
-    await writable.close();
-    await repository.setMeta("lastAutomaticBackup", new Date().toISOString());
-    storageWarning = "";
-  } catch (error) {
-    storageWarning = `Automatic backup failed: ${error.message}`;
-  } finally {
-    automaticBackupRunning = false;
-    await refreshDataStatus();
-  }
-}
-
-function queueAutomaticBackup() {
-  if (!repository) return;
-  clearTimeout(automaticBackupTimer);
-  automaticBackupTimer = setTimeout(() => runAutomaticBackup("change"), 1500);
+function renderDataStatus() {
+  const status = serverStatus;
+  if (!status) return;
+  const messageCount = (persistedState.messages || []).length;
+  elements.dataFolderStatus.textContent = `Data folder: ${status.dataDir}`;
+  elements.dataFolderStatus.title = status.dataDir;
+  elements.integrityStatus.textContent = `Integrity check: ${status.integrity?.ok ? "passed" : "failed"} · ${serverSeq} log record${serverSeq === 1 ? "" : "s"}`;
+  elements.messageCountStatus.textContent = `Messages: ${messageCount.toLocaleString()}`;
+  const backup = status.lastBackup;
+  elements.backupStatus.textContent = `Last backup: ${backup ? `${formatStatusTime(backup.at)}${backup.verified ? " · verified" : backup.fromDisk ? "" : " · NOT verified"}` : "Never"}`;
+  elements.backupStatus.title = backup?.file || status.backupDir || "";
+  const warnings = [];
+  if (!serverReachable) warnings.push("SelfChat server is not reachable. New changes are not being saved.");
+  if (status.firstRun) warnings.push(`A new empty data folder was created at ${status.dataDir}.`);
+  if (status.integrity?.repair) warnings.push(`An interrupted write was set aside on startup (${status.integrity.repair.savedAs}). No acknowledged change was affected.`);
+  if (backup?.error) warnings.push(backup.error);
+  elements.dataStatusWarning.textContent = warnings.join(" ");
+  elements.dataStatusWarning.hidden = !warnings.length;
 }
 
 function normalizeCustomStickers(value) {
@@ -1757,7 +1628,7 @@ function finishMarqueeSelection(pointerId, cancelled = false) {
 }
 
 elements.messageStage.addEventListener("pointerdown", event => {
-  if (event.button !== 0 || event.pointerType === "touch" || document.querySelector("dialog[open]") || tabIsBlocked) return;
+  if (event.button !== 0 || event.pointerType === "touch" || document.querySelector("dialog[open]") || appBlocked) return;
   if (event.target.closest("[data-message-id], .day-divider, button, a, input, textarea, select")) return;
   const rect = elements.messageStage.getBoundingClientRect();
   const scrollbarWidth = elements.messageStage.offsetWidth - elements.messageStage.clientWidth;
@@ -1799,7 +1670,7 @@ elements.messageStage.addEventListener("pointerup", event => finishMarqueeSelect
 elements.messageStage.addEventListener("pointercancel", event => finishMarqueeSelection(event.pointerId, true));
 
 elements.messageList.addEventListener("pointerdown", event => {
-  if (event.button !== 0 || event.pointerType === "touch" || document.querySelector("dialog[open]") || tabIsBlocked) return;
+  if (event.button !== 0 || event.pointerType === "touch" || document.querySelector("dialog[open]") || appBlocked) return;
   if (event.target.closest("button, a, input, textarea, select, [contenteditable='true']")) return;
   const article = event.target.closest("[data-message-id]");
   if (!article || !selectedActionMessageIds().includes(article.dataset.messageId)) return;
@@ -2052,7 +1923,6 @@ const sendTextMessage = SelfChatAppCore.createTextSendController({
   setInput(value) {
     elements.messageInput.value = value;
     state.drafts[state.activeChatId] = value;
-    if (!repository) setDraftBuffer(state.activeChatId, value);
     resizeComposer();
     updateComposerState();
   },
@@ -2060,26 +1930,21 @@ const sendTextMessage = SelfChatAppCore.createTextSendController({
   getExtra: replyFields,
   createId: uid,
   now: () => new Date().toISOString(),
-  addOptimistic(message) {
+  async persist(message, remainingText) {
+    clearTimeout(draftSaveTimer);
     state.messages.push(message);
+    state.drafts[message.chatId] = remainingText;
+    await saveState();
+  },
+  onSaved(message) {
+    if (message.replyToId && message.replyToId === pendingReplyId) cancelReply();
     insertMessageElement(message, { scroll: true });
     renderChats();
     elements.messageInput.focus();
   },
-  async persist(message) {
-    await saveState();
-    if (message.replyToId === pendingReplyId) cancelReply();
-    if (!repository) clearDraftBuffer(message.chatId, "");
-  },
-  rollback(message) {
-    state.messages = state.messages.filter(item => item.id !== message.id);
-    state.drafts[message.chatId] = elements.messageInput.value;
-    removeMessageElements([message.id]);
-    renderChats();
-  },
-  onFailure() {
+  onFailure(error) {
     state.drafts[state.activeChatId] = elements.messageInput.value;
-    showToast("Message not saved — your text is still here", 5000);
+    showToast(error?.code === "UNREACHABLE" ? "SelfChat server is not reachable — message not saved, your text is still here" : "Message not saved — your text is still here", 6000);
     elements.messageInput.focus();
   }
 });
@@ -2114,22 +1979,19 @@ async function sendAttachments(files, caption = "") {
   });
   if (!batch.messages.length) return showToast("Choose a file");
   const addedMessageIds = batch.messages.map(message => message.id);
-  const addedAttachmentIds = batch.attachments.map(record => record.id);
-  if (!repository) {
-    try { await addImages(batch.attachments); }
-    catch (_) { return showToast("Files could not be saved locally", 5000); }
+  try {
+    for (const attachment of batch.attachments) await uploadAttachment(attachment);
+  } catch (_) {
+    return showToast("Files not sent — they are still ready to send", 5000);
   }
   state.messages.push(...batch.messages);
   state.drafts[state.activeChatId] = "";
   try {
-    await saveState({ attachmentsPut: repository ? batch.attachments : [] });
+    await saveState();
   } catch (_) {
-    state.messages = state.messages.filter(message => !addedMessageIds.includes(message.id));
-    if (!repository) await deleteImages(addedAttachmentIds).catch(() => {});
     showToast("Files not sent — they are still ready to send", 5000);
     return;
   }
-  if (!repository) clearDraftBuffer(state.activeChatId, elements.messageInput.value);
   clearPendingImages();
   elements.messageInput.value = "";
   resizeComposer();
@@ -2260,7 +2122,7 @@ async function selectChat(id, messageId = null) {
   selectionAnchorMessageId = null;
   pinnedMessageIndex = 0;
   focusedMessageId = messageId;
-  await saveState({ significant: false });
+  rememberActiveChat();
   elements.messageInput.value = state.drafts[id] || "";
   resizeComposer();
   updateComposerState();
@@ -2324,7 +2186,7 @@ async function deleteMessagesWithUndo(messageIds) {
   const token = SelfChatAppCore.moveMessagesToTrash(state, ids, new Date().toISOString());
   if (!token) return;
   try {
-    await saveState();
+    await saveState({ deletes: { messages: token.messages.map(message => message.id) } });
     selectedMessageIds.clear();
     selectedImageIds.clear();
     removeMessageElements(ids);
@@ -2338,7 +2200,7 @@ async function deleteMessagesWithUndo(messageIds) {
       run: async () => {
         try {
           const restored = SelfChatAppCore.undoMessagesToTrash(state, token);
-          await saveState();
+          await saveState({ deletes: { trash: token.messages.map(message => `message:${message.id}`) } });
           restored.forEach(message => insertMessageElement(message));
           renderChats();
           renderPinnedMessageBanner();
@@ -2383,63 +2245,6 @@ function trashLabel(item) {
   return message.text || "Message";
 }
 
-function purgeTargets(items) {
-  const entityIds = new Set();
-  const chatIds = new Set();
-  const messageIds = new Set();
-  const imageIds = new Set();
-  items.forEach(item => {
-    entityIds.add(item.entityId);
-    const payload = item.payload || {};
-    if (item.entityType === "chat") {
-      chatIds.add(item.entityId);
-      if (payload.chat?.avatarImageId) imageIds.add(payload.chat.avatarImageId);
-      (payload.messages || []).forEach(message => {
-        messageIds.add(message.id);
-        entityIds.add(message.id);
-        if (message.imageId) imageIds.add(message.imageId);
-        if (message.attachmentId) imageIds.add(message.attachmentId);
-      });
-    } else {
-      messageIds.add(item.entityId);
-      if (payload.message?.imageId) imageIds.add(payload.message.imageId);
-      if (payload.message?.attachmentId) imageIds.add(payload.message.attachmentId);
-    }
-  });
-  return { entityIds, chatIds, messageIds, imageIds };
-}
-
-function redactPurgedContent(value, targets) {
-  return SelfChatStorageCore.redactState(value, targets, DEFAULT_STATE);
-}
-
-function redactLegacySources(targets) {
-  [STORAGE_KEY, RECOVERY_KEY].forEach(key => {
-    const stored = readStoredState(key);
-    if (stored) localStorage.setItem(key, JSON.stringify(redactPurgedContent(stored, targets)));
-  });
-}
-
-async function redactRecoveryPoints(targets) {
-  const snapshots = await withRecoveryStore("readonly", store => store.getAll()).catch(() => []);
-  await withRecoveryStore("readwrite", store => snapshots.forEach(snapshot => {
-    const nextState = redactPurgedContent(snapshot.state, targets);
-    store.put({ ...snapshot, state: nextState, messageCount: nextState.messages.length, chatCount: nextState.chats.length });
-  }));
-}
-
-async function completePermanentPurge(items) {
-  const targets = purgeTargets(items);
-  await repository?.purgeEveryCopy(targets, state);
-  redactLegacySources(targets);
-  await redactRecoveryPoints(targets);
-  const snapshots = await withRecoveryStore("readonly", store => store.getAll()).catch(() => []);
-  const referenced = SelfChatStorageCore.referencedAttachmentIds(state, snapshots.map(snapshot => snapshot.state));
-  const unreferenced = [...targets.imageIds].filter(id => !referenced.has(id));
-  if (unreferenced.length) await withImageStore("readwrite", store => unreferenced.forEach(id => store.delete(id))).catch(() => {});
-  lastRecoverySignature = recoverySignature(state);
-}
-
 function renderTrash() {
   const items = [...(state.trash || [])].sort((a, b) => (b.deletedAt || "").localeCompare(a.deletedAt || ""));
   elements.trashCount.textContent = String(items.length);
@@ -2480,11 +2285,8 @@ elements.messageInput.addEventListener("input", () => {
   resizeComposer();
   updateComposerState();
   state.drafts[state.activeChatId] = elements.messageInput.value;
-  if (!repository) setDraftBuffer(state.activeChatId, elements.messageInput.value);
   clearTimeout(draftSaveTimer);
-  const bufferedChatId = state.activeChatId;
-  const bufferedText = elements.messageInput.value;
-  draftSaveTimer = setTimeout(() => saveState({ significant: false }).then(() => { if (!repository) clearDraftBuffer(bufferedChatId, bufferedText); }).catch(() => showToast("Draft could not be saved", 4000)), 180);
+  draftSaveTimer = setTimeout(() => saveState().catch(() => showToast("Draft could not be saved", 4000)), 400);
 });
 elements.messageInput.addEventListener("keydown", event => {
   if (event.key === "ArrowUp" && !elements.messageInput.value && !pendingImages.length && !event.isComposing) {
@@ -2689,20 +2491,16 @@ elements.stickerForm.addEventListener("submit", async event => {
   const label = elements.stickerNameInput.value.trim() || "My sticker";
   elements.saveStickerButton.disabled = true;
   const attachment = { id: imageId, blob: pendingStickerImage, name: pendingStickerImage.name || label };
-  if (!repository) {
-    try { await putImage(attachment); }
-    catch (_) {
-      elements.saveStickerButton.disabled = false;
-      return showToast("Could not save the sticker locally");
-    }
+  try { await uploadAttachment(attachment); }
+  catch (_) {
+    elements.saveStickerButton.disabled = false;
+    return showToast("Could not save the sticker");
   }
   const sticker = { id: `custom-${uid()}`, imageId, label: label.slice(0, 40) };
   state.customStickers.push(sticker);
-  try { await saveState({ attachmentsPut: repository ? [attachment] : [] }); } catch (_) {
-    state.customStickers = state.customStickers.filter(item => item.id !== sticker.id);
-    if (!repository) await deleteImages([imageId]).catch(() => {});
+  try { await saveState(); } catch (_) {
     elements.saveStickerButton.disabled = false;
-    return showToast("Could not save the sticker locally");
+    return showToast("Could not save the sticker");
   }
   renderStickerGrid();
   elements.stickerDialog.close();
@@ -2804,16 +2602,15 @@ elements.chatForm.addEventListener("submit", async event => {
   if (!name) return;
   const avatar = pendingNewChatAvatar;
   const chat = { id: uid(), name, emoji: selectedEmoji, ...(avatar ? { avatarImageId: avatar.id } : {}), createdAt: new Date().toISOString() };
-  if (avatar && !repository) {
-    try { await putImage(avatar); }
-    catch (_) { return showToast("Chat icon could not be saved locally", 5000); }
+  if (avatar) {
+    try { await uploadAttachment(avatar); }
+    catch (_) { return showToast("Chat icon could not be saved", 5000); }
   }
+  const previousActiveId = state.activeChatId;
   state.chats.push(chat);
   state.activeChatId = chat.id;
-  try { await saveState({ attachmentsPut: repository && avatar ? [avatar] : [] }); } catch (_) {
-    state.chats = state.chats.filter(item => item.id !== chat.id);
-    state.activeChatId = persistedState.activeChatId;
-    if (avatar && !repository) await deleteImages([avatar.id]).catch(() => {});
+  try { await saveState(); } catch (_) {
+    if (state.chats.some(item => item.id === previousActiveId)) state.activeChatId = previousActiveId;
     return showToast("Chat could not be saved", 5000);
   }
   globalViewOpen = false;
@@ -3024,20 +2821,19 @@ elements.avatarForm.addEventListener("submit", async event => {
   if (!chat) return elements.avatarDialog.close();
   const before = structuredClone(chat);
   const record = avatarDraft.record;
-  if (record && !repository) {
-    try { await putImage(record); }
-    catch (_) { return showToast("Chat icon could not be saved locally", 5000); }
+  if (record) {
+    try { await uploadAttachment(record); }
+    catch (_) { return showToast("Chat icon could not be saved", 5000); }
   }
   chat.emoji = avatarDraft.emoji;
   if (record) chat.avatarImageId = record.id;
   else if (avatarDraft.existingImageId) chat.avatarImageId = avatarDraft.existingImageId;
   else delete chat.avatarImageId;
   chat.updatedAt = new Date().toISOString();
-  try { await saveState({ attachmentsPut: repository && record ? [record] : [] }); }
+  try { await saveState(); }
   catch (_) {
     Object.keys(chat).forEach(key => delete chat[key]);
     Object.assign(chat, before);
-    if (record && !repository) await deleteImages([record.id]).catch(() => {});
     return showToast("Chat icon could not be saved", 5000);
   }
   elements.avatarDialog.close();
@@ -3071,7 +2867,11 @@ $("#deleteChatButton").addEventListener("click", async () => {
   state.chats = state.chats.filter(item => item.id !== chat.id);
   state.messages = state.messages.filter(message => message.chatId !== chat.id);
   state.activeChatId = state.chats[0].id;
-  await saveState();
+  try {
+    await saveState({ deletes: { chats: [chat.id], messages: deletedMessages.map(message => message.id) } });
+  } catch (_) {
+    return showToast("Chat could not be moved to Trash", 5000);
+  }
   hiddenGlobalChatIds.delete(chat.id);
   await persistGlobalVisibility().catch(() => {});
   elements.optionsDialog.close();
@@ -3092,7 +2892,7 @@ $("#deleteChatButton").addEventListener("click", async () => {
         state.deletedMessageIds = state.deletedMessageIds.filter(id => !deletedIds.has(id));
         state.deletedMessageIds.push(...priorDeletedMessages);
         state.activeChatId = chat.id;
-        await saveState();
+        await saveState({ deletes: { trash: [`chat:${chat.id}`] } });
         if (wasHiddenInGlobalView) hiddenGlobalChatIds.add(chat.id);
         await persistGlobalVisibility().catch(() => {});
         elements.messageInput.value = draft;
@@ -3155,85 +2955,28 @@ async function renderRecoveryPoints() {
   elements.recoveryList.innerHTML = "";
   const snapshots = await getRecoverySnapshots().catch(() => null);
   if (!snapshots) {
-    elements.recoveryStatus.textContent = "Recovery storage is unavailable in this browser.";
+    elements.recoveryStatus.textContent = "Recovery points are unavailable while the SelfChat server is unreachable.";
     return;
   }
-  const recent = snapshots.sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 8);
+  const recent = snapshots.slice(0, 8);
   elements.recoveryStatus.textContent = recent.length
     ? `Keeping one recovery point per day for up to ${MAX_RECOVERY_SNAPSHOTS} days.`
     : "Your first daily recovery point will appear after the next content change.";
   elements.recoveryList.innerHTML = recent.map(snapshot => {
     const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt));
-    const counts = `${snapshot.messageCount} message${snapshot.messageCount === 1 ? "" : "s"} · ${snapshot.chatCount} chat${snapshot.chatCount === 1 ? "" : "s"}`;
+    const counts = `${snapshot.messageCount} message${snapshot.messageCount === 1 ? "" : "s"} · ${snapshot.chatCount} chat${snapshot.chatCount === 1 ? "" : "s"}${snapshot.label === "Before restore" ? " · before restore" : ""}`;
     return `<div class="recovery-row"><span><strong>${escapeHtml(date)}</strong><small>${escapeHtml(counts)}</small></span><button type="button" data-restore-snapshot="${escapeHtml(snapshot.id)}">Restore</button></div>`;
   }).join("");
 }
 
 async function renderStorageDiagnostics() {
-  const [estimate, images, snapshots] = await Promise.all([
-    navigator.storage?.estimate?.().catch(() => null),
-    getAllImages().catch(() => []),
-    getRecoverySnapshots().catch(() => [])
-  ]);
-  const used = estimate?.usage == null ? "Unavailable" : `${(estimate.usage / 1024 / 1024).toFixed(1)} MB used`;
-  const quota = estimate?.quota == null ? "" : ` of ${(estimate.quota / 1024 / 1024).toFixed(0)} MB`;
-  const lastExport = repository ? await repository.getMeta("lastExport").catch(() => null) : localStorage.getItem("selfchat-last-export-v1");
+  await refreshServerStatus();
+  const status = serverStatus;
+  const attachments = Object.keys(attachmentIndex()).length;
+  const lastExport = localStorage.getItem(LAST_EXPORT_KEY);
   const exportText = lastExport ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(lastExport)) : "Never";
-  const syncStatus = repository?.metadata.syncProfile && repository?.metadata.deviceCredentials
-    ? "Encrypted sync identity ready · transport off"
-    : "Encrypted sync identity unavailable";
-  elements.storageDiagnostics.textContent = `${storageMode === "indexeddb" ? "Unified IndexedDB active" : "v0.9.2 fallback active"} · ${syncStatus} · ${used}${quota} · ${images.length} local attachment${images.length === 1 ? "" : "s"} · ${snapshots.length} daily recovery point${snapshots.length === 1 ? "" : "s"} · Last export: ${exportText}`;
-}
-
-function shortDeviceId(value = "") {
-  return value.length > 18 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
-
-function renderSyncDeviceStatus() {
-  if (!repository?.metadata.syncProfile) {
-    elements.syncDeviceStatus.textContent = "Encrypted device pairing is unavailable in fallback storage mode.";
-    return;
-  }
-  const active = (repository.metadata.authorizedDevices || []).filter(device => !device.blockedAt && !device.revokedAt).length;
-  const keyEpoch = Number.isSafeInteger(repository.metadata.syncProfile.keyEpoch) ? repository.metadata.syncProfile.keyEpoch : 1;
-  elements.syncDeviceStatus.textContent = `${active} authorized device${active === 1 ? "" : "s"} · key epoch ${keyEpoch} · automatic transport off`;
-}
-
-function renderAuthorizedDevices() {
-  if (!repository) {
-    elements.authorizedDeviceList.innerHTML = '<p class="dialog-copy">Unified storage is required for device pairing.</p>';
-    return;
-  }
-  const currentId = repository.metadata.deviceIdentity.id;
-  elements.authorizedDeviceList.innerHTML = (repository.metadata.authorizedDevices || []).map(device => {
-    const current = device.deviceId === currentId;
-    const status = current ? "This device" : device.revokedAt ? "Revoked" : device.blockedAt ? "Blocked locally" : "Authorized";
-    const label = device.label || (current ? "This device" : "Paired device");
-    const action = !current && !device.revokedAt ? `<button type="button" data-revoke-device="${escapeHtml(device.deviceId)}">${device.blockedAt ? "Finish revocation" : "Revoke device"}</button>` : "";
-    return `<div class="authorized-device-row"><span><strong>${escapeHtml(label)} · ${escapeHtml(status)}</strong><small>${escapeHtml(shortDeviceId(device.deviceId))}</small></span>${action}</div>`;
-  }).join("");
-}
-
-function showPairingOutput(title, payload, verificationCode = "") {
-  elements.pairingOutput.hidden = false;
-  elements.pairingOutputTitle.textContent = title;
-  elements.pairingOutputText.value = JSON.stringify(payload);
-  elements.pairingVerificationCode.hidden = !verificationCode;
-  elements.pairingVerificationCode.textContent = verificationCode ? `Verify ${verificationCode}` : "";
-}
-
-async function persistPairingDeviceLabel() {
-  const label = elements.pairingDeviceLabel.value.trim() || "This device";
-  if (repository?.metadata.syncDeviceLabel !== label) await repository.setMeta("syncDeviceLabel", label);
-  return label;
-}
-
-async function reloadRemoteState() {
-  state = await repository.load();
-  persistedState = structuredClone(state);
-  hiddenGlobalChatIds = normalizeGlobalHiddenChatIds(repository.metadata.globalHiddenChatIds || []);
-  renderStickerGrid();
-  render();
+  const points = status?.recoveryPoints ?? 0;
+  elements.storageDiagnostics.textContent = `Saved on disk by the SelfChat server · ${serverSeq} log record${serverSeq === 1 ? "" : "s"} · ${attachments} attachment${attachments === 1 ? "" : "s"} · ${points} recovery point${points === 1 ? "" : "s"} · Backups: ${status?.backupDir || "unknown"} · Last export: ${exportText}`;
 }
 
 function runningAsInstalledApp() {
@@ -3256,7 +2999,7 @@ async function refreshOfflineAppStatus() {
   elements.installAppHelp.textContent = installed
     ? "SelfChat is running as an installed app on this device."
     : deferredInstallPrompt
-      ? "Install this local-first app without moving your existing browser data."
+      ? "Install SelfChat as an app window. Your data stays in the data folder on this PC."
       : "Use this browser’s app or home-screen menu if installation is available.";
 }
 
@@ -3265,154 +3008,8 @@ $("#settingsButton").addEventListener("click", () => {
   renderTrash();
   renderRecoveryPoints();
   renderStorageDiagnostics();
-  renderSyncDeviceStatus();
   refreshOfflineAppStatus();
 });
-$("#openPairingButton").addEventListener("click", () => {
-  if (!repository) return showToast("Unified storage is required for pairing", 5000);
-  elements.settingsDialog.close();
-  elements.pairingDeviceLabel.value = repository.metadata.syncDeviceLabel || "This device";
-  elements.pairingInputText.value = "";
-  elements.pairingOutput.hidden = true;
-  elements.pairingResult.textContent = "Automatic transport remains off.";
-  renderAuthorizedDevices();
-  elements.pairingDialog.showModal();
-});
-$("#createPairingInvitationButton").addEventListener("click", async () => {
-  try {
-    const label = await persistPairingDeviceLabel();
-    const { invitation, verificationCode } = await repository.createPairingInvitation(label);
-    showPairingOutput("Invitation ready — paste it on the other device", invitation, verificationCode);
-    elements.pairingResult.textContent = "Compare the same verification code on both devices before approving the request.";
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  }
-});
-$("#createEncryptedUpdateButton").addEventListener("click", async () => {
-  try {
-    const envelope = await repository.createEncryptedUpdate();
-    showPairingOutput("Encrypted update ready", envelope);
-    elements.pairingResult.textContent = "Paste this on an authorized device. Message content is encrypted; attachment bytes are not included.";
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  }
-});
-$("#createErasureUpdateButton").addEventListener("click", async () => {
-  try {
-    const envelope = await repository.createErasureUpdate();
-    showPairingOutput("Encrypted erasure update ready", envelope);
-    elements.pairingResult.textContent = "Paste this on every authorized device. It contains only encrypted stable IDs, types, and erasure times—never message content.";
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  }
-});
-$("#downloadEncryptedPackageButton").addEventListener("click", async event => {
-  const button = event.currentTarget;
-  button.disabled = true;
-  try {
-    const syncPackage = await repository.createEncryptedPackage();
-    const blob = new Blob([JSON.stringify(syncPackage)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `selfchat-sync-${new Date().toISOString().replace(/[:.]/g, "-")}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    const count = syncPackage.attachments.length;
-    elements.pairingResult.textContent = `Encrypted package downloaded with ${count} attachment${count === 1 ? "" : "s"}. Automatic transport remains off.`;
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  } finally {
-    button.disabled = false;
-  }
-});
-elements.encryptedPackageInput.addEventListener("change", async () => {
-  const file = elements.encryptedPackageInput.files[0];
-  if (!file) return;
-  try {
-    const result = await repository.applyEncryptedPackage(JSON.parse(await file.text()));
-    await reloadRemoteState();
-    elements.pairingResult.textContent = `Applied ${result.applied} authenticated operation${result.applied === 1 ? "" : "s"} and stored ${result.attachmentsStored} attachment${result.attachmentsStored === 1 ? "" : "s"}.`;
-    renderSyncDeviceStatus();
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  } finally {
-    elements.encryptedPackageInput.value = "";
-  }
-});
-$("#copyPairingOutputButton").addEventListener("click", async () => {
-  try {
-    await navigator.clipboard.writeText(elements.pairingOutputText.value);
-    elements.pairingResult.textContent = "Generated text copied.";
-  } catch (_) {
-    elements.pairingOutputText.select();
-    elements.pairingResult.textContent = "Copy was unavailable. The generated text is selected.";
-  }
-});
-$("#processPairingInputButton").addEventListener("click", async () => {
-  try {
-    const payload = JSON.parse(elements.pairingInputText.value.trim());
-    const label = await persistPairingDeviceLabel();
-    if (payload.type === "selfchat-pairing-invitation") {
-      const { request, verificationCode } = await repository.createPairingRequest(payload, label);
-      showPairingOutput("Pairing request ready — return it to the inviting device", request, verificationCode);
-      elements.pairingResult.textContent = "Confirm that this verification code matches the inviting device.";
-    } else if (payload.type === "selfchat-enrollment-request") {
-      const { grant, verificationCode } = await repository.issuePairingGrant(payload);
-      showPairingOutput("Pairing grant ready — return it to the new device", grant, verificationCode);
-      elements.pairingResult.textContent = "The new device is now authorized. It must accept this short-lived grant.";
-      renderAuthorizedDevices();
-    } else if (payload.type === "selfchat-enrollment-grant") {
-      const result = await repository.acceptPairingGrant(payload);
-      elements.pairingOutput.hidden = true;
-      elements.pairingResult.textContent = `Paired successfully with profile ${shortDeviceId(result.profileId)}.`;
-      renderAuthorizedDevices();
-    } else if (payload.manifest?.type === "selfchat-key-rotation") {
-      const result = await repository.acceptKeyRotationPackage(payload);
-      elements.pairingOutput.hidden = true;
-      elements.pairingResult.textContent = `Accepted key epoch ${result.keyEpoch}. ${result.revokedDeviceIds.length} device${result.revokedDeviceIds.length === 1 ? "" : "s"} revoked.`;
-      renderAuthorizedDevices();
-    } else if (payload.type === "selfchat-encrypted-sync-package") {
-      const result = await repository.applyEncryptedPackage(payload);
-      await reloadRemoteState();
-      elements.pairingResult.textContent = `Applied ${result.applied} authenticated operation${result.applied === 1 ? "" : "s"} and stored ${result.attachmentsStored} attachment${result.attachmentsStored === 1 ? "" : "s"}.`;
-    } else if (payload.header?.type === "selfchat-operation-envelope") {
-      const result = await repository.applyRemoteEnvelope(payload);
-      await reloadRemoteState();
-      elements.pairingResult.textContent = `Applied ${result.applied} of ${result.received} authenticated operation${result.received === 1 ? "" : "s"}.`;
-    } else if (payload.header?.type === "selfchat-erasure-envelope") {
-      const result = await repository.applyErasureEnvelope(payload);
-      await reloadRemoteState();
-      elements.pairingResult.textContent = `Applied ${result.received} authenticated erasure marker${result.received === 1 ? "" : "s"}. Older updates cannot restore those records.`;
-    } else {
-      throw new Error("This is not recognized SelfChat pairing or encrypted update data");
-    }
-    elements.pairingInputText.value = "";
-    renderSyncDeviceStatus();
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  }
-});
-elements.authorizedDeviceList.addEventListener("click", async event => {
-  const button = event.target.closest("[data-revoke-device]");
-  if (!button) return;
-  const approved = await requestConfirmation({
-    title: "Revoke this device?",
-    message: "SelfChat will rotate the shared profile key. Paste the generated rotation package on every remaining authorized device; the revoked device will not receive the replacement key.",
-    confirmLabel: "Revoke and rotate key"
-  });
-  if (!approved) return;
-  try {
-    const result = await repository.rotateProfileKeyAndRevokeDevice(button.dataset.revokeDevice);
-    showPairingOutput("Key rotation ready — paste it on every remaining device", result.rotationPackage);
-    renderAuthorizedDevices();
-    renderSyncDeviceStatus();
-    elements.pairingResult.textContent = `Device revoked at key epoch ${result.keyEpoch}. Remaining devices must accept this rotation package before exchanging new updates.`;
-  } catch (error) {
-    elements.pairingResult.textContent = error.message;
-  }
-});
-$("#closePairingButton").addEventListener("click", () => elements.pairingDialog.close());
 elements.installAppButton.addEventListener("click", async () => {
   if (!deferredInstallPrompt) return refreshOfflineAppStatus();
   const prompt = deferredInstallPrompt;
@@ -3422,21 +3019,30 @@ elements.installAppButton.addEventListener("click", async () => {
   await prompt.userChoice.catch(() => null);
   await refreshOfflineAppStatus();
 });
-elements.automaticBackupFolderButton.addEventListener("click", async () => {
-  if (!("showDirectoryPicker" in window) || !repository) return refreshDataStatus();
+elements.backupFolderButton.addEventListener("click", () => {
+  elements.backupFolderInput.value = serverStatus?.backupDir || "";
+  elements.backupFolderError.hidden = true;
+  elements.backupFolderDialog.showModal();
+  setTimeout(() => { elements.backupFolderInput.focus(); elements.backupFolderInput.select(); }, 30);
+});
+$("#cancelBackupFolderButton").addEventListener("click", () => elements.backupFolderDialog.close());
+elements.backupFolderForm.addEventListener("submit", async event => {
+  event.preventDefault();
+  const submit = elements.backupFolderForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
   try {
-    const handle = await window.showDirectoryPicker({ mode: "readwrite", id: "selfchat-backups" });
-    const permission = await handle.requestPermission({ mode: "readwrite" });
-    if (permission !== "granted") throw new Error("Folder permission was not granted");
-    await repository.setMeta("backupDirectoryHandle", handle);
-    storageWarning = "";
-    await runAutomaticBackup("folder-selected");
-    showToast("Automatic backup folder saved");
+    const result = await api("/api/settings/backup-dir", { method: "POST", body: { path: elements.backupFolderInput.value, origin: tabId } });
+    acceptRecord(result.record);
+    serverStatus = result.status;
+    renderDataStatus();
+    renderStorageDiagnostics();
+    elements.backupFolderDialog.close();
+    showToast(result.backup?.verified ? "Backup folder saved · backup written and verified" : "Backup folder saved, but the backup failed — see the data status", 6000);
   } catch (error) {
-    if (error.name !== "AbortError") {
-      storageWarning = `Automatic backup folder unavailable: ${error.message}`;
-      await refreshDataStatus();
-    }
+    elements.backupFolderError.textContent = error.message;
+    elements.backupFolderError.hidden = false;
+  } finally {
+    submit.disabled = false;
   }
 });
 $("#closeSettingsButton").addEventListener("click", () => elements.settingsDialog.close());
@@ -3473,7 +3079,7 @@ elements.trashList.addEventListener("click", async event => {
         state.deletedMessageIds = state.deletedMessageIds.filter(id => id !== item.entityId);
       }
       state.trash = state.trash.filter(candidate => candidate.id !== item.id);
-      await saveState();
+      await saveState({ deletes: { trash: [item.id] } });
       if (restoredMessage) insertMessageElement(restoredMessage);
       updateReplyPreviews(item.entityId);
       renderChats(); renderTrash();
@@ -3485,51 +3091,56 @@ elements.trashList.addEventListener("click", async event => {
   }
   if (!await requestConfirmation({
     title: "Delete permanently?",
-    message: `Erase “${trashLabel(item).slice(0, 80)}” from this browser? This removes it from Trash, daily recovery points, migration backups, and unreferenced local attachment storage. This cannot be undone.`,
+    message: `Remove “${trashLabel(item).slice(0, 80)}” from Trash? It disappears from SelfChat and from future backups. Its text stays in the data log on this PC and in earlier backup files.`,
     confirmLabel: "Delete permanently"
   })) return;
   try {
     state.trash = state.trash.filter(candidate => candidate.id !== item.id);
-    await saveState();
-    await completePermanentPurge([item]);
+    await saveState({ deletes: { trash: [item.id] } });
     updateReplyPreviews(item.entityId);
     renderTrash();
     await renderRecoveryPoints();
     await renderStorageDiagnostics();
-    showToast("Erased from this browser");
+    showToast("Deleted from Trash");
   } catch (_) { showToast("Item could not be permanently deleted", 5000); }
 });
 elements.emptyTrashButton.addEventListener("click", async () => {
   if (!state.trash.length || !await requestConfirmation({
     title: "Empty Trash permanently?",
-    message: "Erase every Trash item from this browser? This also removes matching recovery, migration, history, and unreferenced image data. This cannot be undone.",
+    message: "Remove every Trash item? They disappear from SelfChat and from future backups. Their text stays in the data log on this PC and in earlier backup files.",
     confirmLabel: "Empty Trash"
   })) return;
   const items = structuredClone(state.trash);
   try {
     state.trash = [];
-    await saveState();
-    await completePermanentPurge(items);
+    await saveState({ deletes: { trash: items.map(item => item.id) } });
     items.forEach(item => updateReplyPreviews(item.entityId));
     renderTrash();
     await renderRecoveryPoints();
     await renderStorageDiagnostics();
-    showToast("Trash erased from this browser");
+    showToast("Trash emptied");
   } catch (_) { showToast("Trash could not be emptied", 5000); }
 });
 elements.recoveryList.addEventListener("click", async event => {
   const button = event.target.closest("[data-restore-snapshot]");
   if (!button) return;
-  const snapshots = await getRecoverySnapshots().catch(() => []);
-  const snapshot = snapshots.find(item => item.id === button.dataset.restoreSnapshot);
-  if (!snapshot) return;
-  recoveryPreviewSnapshot = snapshot;
-  const target = normalizeState(snapshot.state);
+  let point;
+  try {
+    const points = await getRecoverySnapshots();
+    const listed = points.find(item => item.id === button.dataset.restoreSnapshot);
+    if (!listed) return;
+    const { state: pointState } = await api(`/api/recovery-points/${encodeURIComponent(listed.id)}`);
+    point = { ...listed, state: pointState };
+  } catch (_) {
+    return showToast("Recovery point could not be loaded", 5000);
+  }
+  recoveryPreviewSnapshot = point;
+  const target = normalizeState(point.state);
   const currentIds = new Set(state.messages.map(message => message.id));
   const targetIds = new Set(target.messages.map(message => message.id));
   const restored = target.messages.filter(message => !currentIds.has(message.id)).length;
   const removed = state.messages.filter(message => !targetIds.has(message.id)).length;
-  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.createdAt));
+  const date = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(point.createdAt));
   elements.recoveryPreviewSummary.textContent = `${date}: ${target.chats.length} chats and ${target.messages.length} messages. Compared with now, ${restored} messages will return and ${removed} newer messages will leave the active view. A new recovery point will preserve the current state.`;
   elements.recoveryPreviewDialog.showModal();
 });
@@ -3538,18 +3149,16 @@ $("#confirmRecoveryButton").addEventListener("click", async () => {
   const snapshot = recoveryPreviewSnapshot;
   if (!snapshot) return;
   $("#confirmRecoveryButton").disabled = true;
-  if (repository) await repository.commit({ activeChatId: state.activeChatId }, { significant: true, snapshotState: state }).catch(() => {});
-  else await createRecoverySnapshot("Before restore", state, { force: true }).catch(() => {});
   try {
-    const target = repository ? repository.redactErasedState(snapshot.state) : normalizeState(snapshot.state);
-    if (repository) {
-      state = await repository.replaceState(target);
-      persistedState = structuredClone(state);
-    } else {
-      state = target;
-      await saveState({ significant: false });
-    }
-    lastRecoverySignature = recoverySignature(state);
+    const target = normalizeState(snapshot.state);
+    const removedIds = store => {
+      const keep = new Set(target[store].map(record => record.id));
+      return state[store].filter(record => !keep.has(record.id)).map(record => record.id);
+    };
+    const deletes = { chats: removedIds("chats"), messages: removedIds("messages"), customStickers: removedIds("customStickers"), trash: removedIds("trash") };
+    const activeChatId = state.activeChatId;
+    state = normalizeState({ ...target, activeChatId: target.chats.some(chat => chat.id === activeChatId) ? activeChatId : target.chats[0]?.id });
+    await saveState({ deletes, label: "restore" });
     recoveryPreviewSnapshot = null;
     elements.recoveryPreviewDialog.close();
     renderStickerGrid();
@@ -3561,50 +3170,38 @@ $("#confirmRecoveryButton").addEventListener("click", async () => {
   finally { $("#confirmRecoveryButton").disabled = false; }
 });
 $("#exportButton").addEventListener("click", async () => {
-  const payload = await buildBackupPayload();
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
-  link.href = url;
+  link.href = "/api/export";
   link.download = `selfchat-backup-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.append(link);
   link.click();
-  URL.revokeObjectURL(url);
-  const exportedAt = new Date().toISOString();
-  if (repository) await repository.setMeta("lastExport", exportedAt);
-  else localStorage.setItem("selfchat-last-export-v1", exportedAt);
+  link.remove();
+  localStorage.setItem(LAST_EXPORT_KEY, new Date().toISOString());
   renderStorageDiagnostics();
-  await refreshDataStatus();
   showToast("Backup exported");
 });
 elements.importInput.addEventListener("change", async () => {
   const file = elements.importInput.files[0];
   if (!file) return;
-  let importedImagesToRollback = [];
-  let existingImageIds = new Set();
-  let importCommitted = false;
   try {
-    const parsed = SelfChatStorageCore.parseBackup(JSON.parse(await file.text()), DEFAULT_STATE);
-    const imported = repository ? repository.redactErasedState(parsed.state) : parsed.state;
-    const imageCount = parsed.attachments.length;
+    const text = await file.text();
+    const { report: plan } = await api("/api/import?dryRun=1", { method: "POST", body: text, headers: { "Content-Type": "application/json" } });
     if (!await requestConfirmation({
       title: "Import this backup?",
-      message: `Merge ${imported.chats.length} chats, ${imported.messages.length} messages, and ${imageCount} attachments? Existing records will be kept; matching stable IDs use the newer version.`,
+      message: `Merge ${plan.backup.chats} chats, ${plan.backup.messages} messages, and ${plan.backup.attachments} attachments? Existing records will be kept; matching stable IDs use the newer version.`,
       confirmLabel: "Import backup"
     })) return;
-    importedImagesToRollback = parsed.attachments.map(image => ({ id: image.id, name: image.name || "Attachment", blob: dataUrlToBlob(image.data) }));
-    existingImageIds = new Set((await getAllImages().catch(() => [])).map(image => image.id));
-    const newAttachments = importedImagesToRollback.filter(image => !existingImageIds.has(image.id));
-    if (!repository) await addImages(newAttachments);
-    state = mergeStates([state, imported], state);
-    await saveState({ attachmentsPut: repository ? newAttachments : [] });
-    importCommitted = true;
+    const { report, seq } = await api("/api/import", { method: "POST", body: text, headers: { "Content-Type": "application/json" } });
+    await waitForSeq(seq);
     renderStickerGrid();
     render();
     elements.settingsDialog.close();
-    showToast("Backup merged");
-  } catch (_) {
-    if (!repository && !importCommitted) await deleteImages(importedImagesToRollback.filter(image => !existingImageIds.has(image.id)).map(image => image.id)).catch(() => {});
-    showToast("That is not a valid SelfChat backup");
+    const found = report.verification.found;
+    showToast(report.verification.ok
+      ? `Backup merged · all ${found.messages} messages, ${found.chats} chats, ${found.attachments} attachments and ${found.trash} Trash items are here`
+      : `Backup merged, but some items are missing: ${found.messages}/${report.backup.messages} messages, ${found.attachments}/${report.backup.attachments} attachments`, 8000);
+  } catch (error) {
+    showToast(error.status === 400 ? "That is not a valid SelfChat backup" : `Import failed: ${error.message}`, 6000);
   } finally {
     elements.importInput.value = "";
   }
@@ -3892,22 +3489,9 @@ elements.contextMenu.addEventListener("click", async event => {
   }
 });
 
-elements.useThisTabButton.addEventListener("click", claimThisTab);
-elements.closeThisTabButton.addEventListener("click", () => {
-  window.close();
-  setTimeout(() => {
-    elements.singleTabHint.textContent = "Your browser cannot close this tab automatically. Close it from the tab bar.";
-    elements.closeThisTabButton.textContent = "Close manually";
-  }, 120);
-});
-elements.singleTabScreen.addEventListener("keydown", event => {
+elements.storageRetryButton.addEventListener("click", () => location.reload());
+elements.storageScreen.addEventListener("keydown", event => {
   if (event.key === "Escape") event.preventDefault();
-  if (event.key !== "Tab") return;
-  const buttons = [elements.closeThisTabButton, elements.useThisTabButton];
-  const nextIndex = event.shiftKey ? buttons.indexOf(document.activeElement) - 1 : buttons.indexOf(document.activeElement) + 1;
-  if (nextIndex >= 0 && nextIndex < buttons.length) return;
-  event.preventDefault();
-  buttons[event.shiftKey ? buttons.length - 1 : 0].focus();
 });
 document.addEventListener("keydown", event => {
   if (!globalViewOpen && !event.repeat && event.ctrlKey && event.altKey && event.shiftKey && event.key.toLocaleLowerCase() === "p" && !document.querySelector("dialog[open]")) {
@@ -3962,37 +3546,31 @@ document.addEventListener("keydown", event => {
     clearMessageSelection();
   }
 });
-window.addEventListener("storage", event => {
-  if (storageMode === "legacy" && event.key === STORAGE_KEY && event.newValue && !tabIsBlocked) {
-    state = loadLegacyState();
-    persistedState = structuredClone(state);
-    renderStickerGrid();
-    render();
-    return;
-  }
-  if (event.key === ACTIVE_TAB_KEY && event.newValue) {
-    let candidateId = null;
-    try { candidateId = JSON.parse(event.newValue)?.tabId || null; } catch (_) {}
-    honorCurrentTabOwner(candidateId);
-  }
-});
 window.addEventListener("hashchange", () => openLinkedMessageFromLocation());
-if (tabChannel) tabChannel.addEventListener("message", event => {
-  if (event.data?.type === "claim" && event.data.tabId !== tabId) honorCurrentTabOwner(event.data.tabId);
-});
 window.addEventListener("pagehide", () => {
-  clearTimeout(draftSaveTimer);
-  if (!tabIsBlocked) void saveState({ significant: false }).catch(() => {});
-  if (activeTabId() === tabId) localStorage.removeItem(ACTIVE_TAB_KEY);
-  tabChannel?.close();
+  flushDraftsOnExit();
+  eventSource?.close();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "hidden" || tabIsBlocked) return;
+  if (document.visibilityState !== "hidden" || appBlocked) return;
   clearTimeout(draftSaveTimer);
-  void saveState({ significant: false }).catch(() => {});
+  void saveState().catch(() => {});
 });
 
-claimThisTab();
+async function startApp() {
+  if (!await loadFromServer()) return;
+  restoreSplitView();
+  renderStickerGrid();
+  render();
+  elements.messageInput.value = state.drafts[state.activeChatId] || "";
+  resizeComposer();
+  updateComposerState();
+  await openLinkedMessageFromLocation();
+  elements.messageInput.focus();
+  setInterval(() => { if (!appBlocked && document.visibilityState === "visible") void refreshServerStatus(); }, 60000);
+}
+
+startApp();
 
 window.addEventListener("beforeinstallprompt", event => {
   event.preventDefault();

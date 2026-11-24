@@ -11,7 +11,7 @@
   <link rel="stylesheet" href="styles.css?v=42">
 </head>
 <body>
-  <div class="app" id="app">
+  <div class="app" id="app" inert>
     <aside class="sidebar" aria-label="Your chats">
       <header class="sidebar-header">
         <div class="profile-mark" aria-hidden="true">S</div>
@@ -34,15 +34,15 @@
 
       <nav class="chat-list" id="chatList"></nav>
       <div class="data-status-panel" id="dataStatusPanel" aria-live="polite">
-        <span id="originStatus">Origin: checking…</span>
-        <span id="persistenceStatus">Storage: checking…</span>
-        <span id="automaticBackupStatus">Automatic backup: checking…</span>
-        <span id="exportStatus">Last export: checking…</span>
+        <span id="dataFolderStatus">Data folder: checking…</span>
+        <span id="integrityStatus">Integrity check: checking…</span>
+        <span id="messageCountStatus">Messages: checking…</span>
+        <span id="backupStatus">Last backup: checking…</span>
         <strong id="dataStatusWarning" hidden></strong>
       </div>
       <div class="sidebar-foot">
-        <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Stored only in this browser</span>
-        <span class="app-version" title="SelfChat version">v2.10.0</span>
+        <span class="local-status"><span class="status-dot" aria-hidden="true"></span>Saved on this PC</span>
+        <span class="app-version" title="SelfChat version">v3.0.0</span>
       </div>
     </aside>
 
@@ -181,19 +181,19 @@
     </aside>
   </div>
 
-  <section class="single-tab-screen" id="singleTabScreen" role="dialog" aria-modal="true" aria-labelledby="singleTabMessage" hidden>
+  <section class="single-tab-screen" id="storageScreen" role="alertdialog" aria-modal="true" aria-labelledby="storageScreenTitle" aria-live="assertive">
     <div class="single-tab-card">
-      <p id="singleTabMessage">SelfChat is open in another tab. Click “Use this tab” to use SelfChat here.</p>
-      <p class="single-tab-hint" id="singleTabHint" aria-live="polite"></p>
+      <p id="storageScreenTitle">Opening SelfChat…</p>
+      <p class="single-tab-hint" id="storageScreenMessage" hidden></p>
+      <p class="single-tab-hint" id="storageScreenPath"></p>
       <div class="single-tab-actions">
-        <button class="single-tab-close" id="closeThisTabButton" type="button">Close tab</button>
-        <button class="single-tab-use" id="useThisTabButton" type="button">Use this tab</button>
+        <button class="single-tab-use" id="storageRetryButton" type="button" hidden>Try again</button>
       </div>
     </div>
   </section>
 
   <div class="drop-overlay" id="dropOverlay" hidden>
-    <div><strong>Drop files here</strong><span>They stay on this computer</span></div>
+    <div><strong>Drop files here</strong><span>They are saved on this PC</span></div>
   </div>
 
   <dialog id="chatDialog">
@@ -321,9 +321,9 @@
     <div class="dialog-card compact">
       <div class="dialog-label">YOUR DATA</div>
       <h2>Local by default.</h2>
-      <p class="dialog-copy">Everything lives in this browser on this computer. Export a backup occasionally so a browser reset cannot erase your rambling legacy.</p>
+      <p class="dialog-copy">Everything is saved in a data folder on this PC by the SelfChat server, and dated backups are written automatically. Export a backup any time.</p>
       <button class="option-row" id="exportButton" type="button"><span>Export backup</span><b>↓</b></button>
-      <button class="option-row" id="automaticBackupFolderButton" type="button"><span>Choose automatic backup folder</span><b>→</b></button>
+      <button class="option-row" id="backupFolderButton" type="button"><span>Choose automatic backup folder</span><b>→</b></button>
       <label class="option-row file-row" for="importInput"><span>Import backup</span><b>↑</b></label>
       <input id="importInput" type="file" accept="application/json" hidden>
       <button class="option-row" id="openTrashButton" type="button"><span>Trash</span><b id="trashCount">0</b></button>
@@ -332,11 +332,6 @@
         <p id="offlineAppStatus" aria-live="polite">Checking offline availability…</p>
         <button class="option-row" id="installAppButton" type="button" hidden><span>Install SelfChat</span><b>＋</b></button>
         <p class="dialog-copy" id="installAppHelp">Installation availability depends on this browser.</p>
-      </div>
-      <div class="sync-section">
-        <div class="dialog-label">DEVICE PAIRING</div>
-        <p id="syncDeviceStatus">Encrypted identity ready. Automatic transport is off.</p>
-        <button class="option-row" id="openPairingButton" type="button"><span>Pair or sync devices</span><b>→</b></button>
       </div>
       <div class="recovery-section">
         <div class="dialog-label">AUTOMATIC RECOVERY</div>
@@ -348,38 +343,16 @@
     </div>
   </dialog>
 
-  <dialog id="pairingDialog" class="wide-dialog">
-    <div class="dialog-card pairing-card">
-      <div class="dialog-label">ENCRYPTED DEVICE PAIRING</div>
-      <h2>Pair without a cloud account.</h2>
-      <p class="dialog-copy">Move the generated text directly between your devices. Compare the verification code on both screens before continuing. Pairing data expires after 10 minutes.</p>
-      <label for="pairingDeviceLabel">This device name</label>
-      <input id="pairingDeviceLabel" maxlength="80" placeholder="Main PC">
-      <div class="pairing-actions">
-        <button class="button secondary" id="createPairingInvitationButton" type="button">Create invitation</button>
-        <button class="button secondary" id="createEncryptedUpdateButton" type="button">Create text update</button>
-        <button class="button secondary" id="createErasureUpdateButton" type="button">Create erasure update</button>
-        <button class="button primary" id="downloadEncryptedPackageButton" type="button">Download package with attachments</button>
-        <label class="button secondary" for="encryptedPackageInput">Import encrypted package</label>
-        <input id="encryptedPackageInput" type="file" accept="application/json,.json" hidden>
-      </div>
-      <div class="pairing-output" id="pairingOutput" hidden>
-        <strong id="pairingOutputTitle">Pairing data ready</strong>
-        <span class="pairing-code" id="pairingVerificationCode" hidden></span>
-        <textarea id="pairingOutputText" rows="6" readonly aria-label="Generated pairing data"></textarea>
-        <button class="button primary" id="copyPairingOutputButton" type="button">Copy generated text</button>
-      </div>
-      <label for="pairingInputText">Paste invitation, request, grant, key rotation, encrypted update, or erasure update</label>
-      <textarea id="pairingInputText" rows="6" spellcheck="false" placeholder="Paste SelfChat pairing, key rotation, encrypted update, or erasure update here"></textarea>
-      <button class="button primary full" id="processPairingInputButton" type="button">Process pasted text</button>
-      <p class="pairing-result" id="pairingResult" aria-live="polite"></p>
-      <div class="paired-device-section">
-        <div class="dialog-label">AUTHORIZED DEVICES</div>
-        <div id="authorizedDeviceList" class="authorized-device-list"></div>
-        <p class="dialog-warning">Revocation rotates the profile key. Paste its generated package on every remaining authorized device before exchanging new updates.</p>
-      </div>
-      <button class="button secondary full" id="closePairingButton" type="button">Done</button>
-    </div>
+  <dialog id="backupFolderDialog">
+    <form class="dialog-card compact" id="backupFolderForm">
+      <div class="dialog-label">AUTOMATIC BACKUPS</div>
+      <h2>Where should backups go?</h2>
+      <label for="backupFolderInput">Backup folder (full path)</label>
+      <input id="backupFolderInput" maxlength="500" spellcheck="false" placeholder="C:\Users\you\Documents\SelfChat Backups">
+      <p class="dialog-copy">SelfChat writes a dated backup when it starts and at most once an hour while you make changes. Existing backup files are never changed. It keeps the newest backup of each of the last 30 days plus the newest 5 from today.</p>
+      <p class="dialog-warning" id="backupFolderError" hidden></p>
+      <div class="dialog-actions"><button class="button secondary" id="cancelBackupFolderButton" type="button">Cancel</button><button class="button primary" type="submit">Save folder</button></div>
+    </form>
   </dialog>
 
   <dialog id="moveMessagesDialog">
@@ -424,7 +397,7 @@
       <div class="dialog-label">RECOVERY PREVIEW</div>
       <h2>Restore this point in time?</h2>
       <p class="dialog-copy" id="recoveryPreviewSummary"></p>
-      <p class="dialog-warning">Today’s recovery point will preserve the current state if one does not already exist. This restore replaces the current local projection; it does not affect exported backup files.</p>
+      <p class="dialog-warning">The current state stays in the data log as a “before restore” recovery point, so this restore can be undone. It does not affect backup files.</p>
       <div class="dialog-actions">
         <button class="button secondary" id="cancelRecoveryButton" type="button">Cancel</button>
         <button class="button primary" id="confirmRecoveryButton" type="button">Restore</button>
@@ -508,11 +481,9 @@
     <button type="button" role="menuitem" data-chat-action="down">Move down</button>
   </div>
   <div class="toast" id="toast" role="status"></div>
-  <script src="storage-core.js?v=10"></script>
-  <script src="sync-crypto.js?v=5"></script>
-  <script src="sync-backend.js?v=1"></script>
-  <script src="storage.js?v=12"></script>
-  <script src="app-core.js?v=14"></script>
-  <script src="app.js?v=50"></script>
+  <script src="storage-core.js?v=11"></script>
+  <script src="store-core.js?v=1"></script>
+  <script src="app-core.js?v=15"></script>
+  <script src="app.js?v=51"></script>
 </body>
 </html>

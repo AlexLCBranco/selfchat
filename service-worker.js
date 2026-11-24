@@ -1,7 +1,7 @@
-importScripts("service-worker-core.js?v=1");
+importScripts("service-worker-core.js?v=2");
 
-const CACHE_NAME = "selfchat-v62";
-const FILES = ["./", "index.html", "styles.css?v=42", "storage-core.js?v=10", "sync-crypto.js?v=5", "sync-backend.js?v=1", "storage.js?v=12", "app-core.js?v=14", "app.js?v=50", "service-worker-core.js?v=1", "icon.svg?v=3", "manifest.webmanifest"];
+const CACHE_NAME = "selfchat-v63";
+const FILES = ["./", "index.html", "styles.css?v=42", "storage-core.js?v=11", "store-core.js?v=1", "app-core.js?v=15", "app.js?v=51", "service-worker-core.js?v=2", "icon.svg?v=3", "manifest.webmanifest"];
 self.addEventListener("install", event => event.waitUntil(Promise.all([
   caches.open(CACHE_NAME).then(cache => cache.addAll(FILES)),
   self.skipWaiting()
@@ -12,6 +12,8 @@ self.addEventListener("activate", event => event.waitUntil(Promise.all([
 ])));
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
+  // Data never comes from a cache: /api/ requests always go to the local server.
+  if (!SelfChatServiceWorkerCore.isAppShellRequest(event.request, self.location.origin)) return;
   event.respondWith(fetch(event.request).then(response => {
     if (SelfChatServiceWorkerCore.shouldCacheResponse(event.request, response, self.location.origin)) {
       const cacheCopy = response.clone();

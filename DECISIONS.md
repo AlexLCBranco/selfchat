@@ -332,3 +332,19 @@ Permanent deletion retains a minimal anti-resurrection marker containing only a 
 Retained markers filter later imports, recovery restores, local commits, state replacements, ordinary encrypted updates, and attachment packages so older data cannot recreate an erased record. Related message and attachment IDs discovered during purge also receive markers. Version 2.10.0 keeps manual copy/paste transport and the existing IndexedDB schema; it adds no endpoint, account, automatic transport, or cloud persistence.
 
 Reason: a normal synchronized delete can lose to older or delayed state, while permanent erasure must remain irreversible across authorized devices without sending message content or weakening the browser-local privacy boundary.
+
+## 2026-11-24 — Storage rebuild: the local server writes everything to disk (v3.0.0, SC-23)
+
+Replaces the browser-storage decisions above (IndexedDB as source of truth, single-tab lock, automatic folder backup, SC-20 sync). Spec: `REBUILD_SPEC.md`.
+
+- **Architecture.** `server.js` (127.0.0.1 only) is the only writer. Data lives in `Documents\SelfChat Data` as an append-only, SHA-256 checksum-chained `log.jsonl` plus hash-named attachment files. A change is acknowledged only after its line is written and fsynced; the interface shows a message only after that acknowledgement. Reason: the browser could clear or hide IndexedDB data, and in-page code cannot guarantee durability.
+- **Explicit deletes.** The browser sends explicit operations. Saving refuses any record that disappeared without a user action declaring it (`operationsForChange`), so a wrong in-memory state can never become a deletion. Restoring a recovery point is an explicit user action that appends deletes; the log keeps every earlier version.
+- **Failure behavior.** An unreadable folder, a non-SelfChat folder, a missing log or a broken checksum chain gives a blocking error screen with the reason and the folder path; the server refuses writes. Default chats appear only when the data folder did not exist. An incomplete final line (a write that was never acknowledged) is moved to `interrupted-write-*.bin` and cut from the log on startup; this is the only time the log file is shortened, and it is reported in the status panel.
+- **Multiple tabs.** The single-tab lock was removed; every tab receives live updates. The active chat is a per-browser view preference in localStorage.
+- **Backups.** Dated files in `Documents\SelfChat Backups` (changeable in Settings), written at start if anything changed and at most hourly while there are changes, never overwritten, re-read and verified. Retention, approved by the owner ("anything after like 2 weeks is insanely outdated"): newest per day for 30 days plus newest 5 from today; only SelfChat-named files are deleted.
+- **Delete permanently / Empty Trash** hide items from SelfChat and from future backups; the text stays in the log and earlier backups. Owner's choice, to keep the log append-only.
+- **Recovery points** are derived from the log: start of each active day (30 days) and before each restore.
+- **Sync dropped.** The owner uses one desktop; SC-20 code (`sync-crypto.js`, `sync-backend.js`, pairing UI) was removed and recorded as idea I-1.
+- **Hosted site.** `selfchat-home.vercel.app` is left on v2.10.0, untouched. Its data is separate. Decide later whether to retire it.
+- **Import** of the existing backup format merges by stable ID, never deletes, and prints matching counts; it is the gate for switching.
+- **Interface** was ported, not rewritten: rendering and interaction code is unchanged; only the storage layer and storage-related text changed.

@@ -9,7 +9,8 @@ Before changing the project, read `README.md`, `DECISIONS.md`, `FEATURE_BACKLOG.
 ## Product invariants
 
 - SelfChat never has recipients, contacts, shared chats, or social features.
-- User messages remain local to the current browser. The hosted application must not transmit or persist message content.
+- User messages stay on this PC: the local SelfChat server writes them to the data folder on disk. Nothing transmits or persists message content anywhere else.
+- Durability comes first: a change is saved only once the server has flushed it to disk; never show a blank or default state when data exists or cannot be read; deletes are explicit user actions, never derived from a difference.
 - Preserve the fast loop: open a chat, type, press Enter, see the message.
 - Keep the product desktop-first until the user explicitly changes that priority.
 - Do not add AI responses, accounts, cloud sync, analytics, notifications, audio, or video without an explicit request. Images, stickers, and generic file attachments are established features.
@@ -21,14 +22,15 @@ Before changing the project, read `README.md`, `DECISIONS.md`, `FEATURE_BACKLOG.
 - The app is buildless HTML, CSS, and JavaScript.
 - `index.html` owns the page structure.
 - `styles.css` owns the visual system and desktop layout.
-- `app.js` owns browser interaction, chat/message behavior, search, and backup workflows.
-- `app-core.js` owns testable app behavior such as optimistic text sending, reply resolution, attachment-message construction, Trash undo, and selected-message copy formatting.
-- `storage.js` owns the unified IndexedDB repository, migration, atomic changed-record commits, daily snapshots, and permanent erasure.
-- `storage-core.js` owns pure storage normalization, merge, validation, backup, attachment-reference, and redaction logic.
-- `server.js` is a dependency-free local static server.
-- `service-worker.js` and `manifest.webmanifest` provide offline/installable behavior.
-- The `selfchat-unified-v1` IndexedDB database is the active source of truth for chats, messages, drafts, Trash, snapshots, and attachment blobs. Legacy v0.9.2 sources remain migration and rollback inputs for this storage version; explicit permanent erasure also redacts matching legacy copies.
-- Message content stays inside the current browser profile and origin. Automatic folder backups and manual JSON exports are user-initiated local writes, not network transmission.
+- `app.js` owns browser interaction, chat/message behavior, search, and the client side of saving (explicit operations sent to the server, live updates over server-sent events).
+- `app-core.js` owns testable app behavior such as text sending (saved before shown), reply resolution, attachment-message construction, Trash undo, and selected-message copy formatting.
+- `server.js` is the local server (127.0.0.1 only) and the only writer of the data folder; it serves the app and the `/api/` routes.
+- `store.js` owns the append-only, checksum-chained log (`log.jsonl`), hash-named attachment files, the integrity check, the single-writer lock, and recovery points derived from the log.
+- `store-core.js` owns the change operations shared by the server and the browser; `operationsForChange` refuses removals that no user action declared.
+- `transfer.js` owns export and import of the JSON backup format; `backup.js` owns dated, verified, never-overwritten backups and retention; `import-backup.js` is the import command.
+- `storage-core.js` owns pure state normalization used by the interface.
+- `service-worker.js` and `manifest.webmanifest` provide the installable app shell; `/api/` requests are never cached.
+- The data folder (default `Documents\SelfChat Data`) is the only source of truth. The browser keeps no authoritative copy. Backups go to the owner's chosen folder (default `Documents\SelfChat Backups`).
 
 ## Verification
 
@@ -38,7 +40,11 @@ For every code change, run at least:
 node --check app.js
 node --check app-core.js
 node --check server.js
-node --check storage.js
+node --check store.js
+node --check store-core.js
+node --check transfer.js
+node --check backup.js
+node --check import-backup.js
 node --check storage-core.js
 node --check service-worker.js
 npm test

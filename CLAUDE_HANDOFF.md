@@ -1,163 +1,29 @@
 # SelfChat handoff
 
-This file is the persistent implementation-continuity record shared across Codex and ChatGPT work. After every implementation, update it with what changed, checks that actually ran, blockers, and concrete next steps. Keep the state labels **Implemented**, **Tested**, **Committed**, **Pushed**, and **Deployed** separate.
+Implementation-continuity record. Keep the states **Implemented**, **Tested**, **Committed**, **Pushed**, **Deployed** separate. Earlier history (v0.9.2–v2.10.0, IndexedDB and SC-20 sync) is in git history of this file (`e80931f`).
 
-## Current state
+## Current state (2026-11-24)
 
-- The current visible source version is **v2.10.0**. Production remains **v2.9.0** at `https://selfchat-home.vercel.app` (deployment `dpl_DjemGgKqsX3DRTFbBbgy8jdZPG2w`) until the pending v2.10.0 deployment completes.
-- v2.5.0 provides the local synchronization substrate; v2.6.0 adds encrypted envelopes and enrollment primitives; v2.7.0 adds direct-transfer pairing and transactional remote application; v2.8.0 adds manual signed encrypted attachment packages with atomic import; v2.9.0 adds signed profile-key rotation and durable device revocation; v2.10.0 adds signed content-free permanent-erasure propagation and resurrection suppression.
-- SC-20 remains **Approved / in progress**, not fully Implemented. There is still no backend instance, account, automatic network transport, bounded operation/marker compaction, or offline/reconnect integration coverage.
-- SC-21 and SC-22 remain **Approved**. Windows-specific support/packaging and the mobile interaction model have not started.
-- `FEATURE_BACKLOG.md` retains the approved SC-20 through SC-22 entries; preserve their status unless the user explicitly changes it.
+- Branch `storage-rebuild` holds **v3.0.0**: the disk-backed storage rebuild from `REBUILD_SPEC.md` (SC-23). `main` and `https://selfchat-home.vercel.app` remain **v2.10.0**, untouched.
+- Owner decisions (2026-11-24): leave the hosted site as-is for now; drop sync; data folder `Documents\SelfChat Data`; backup folder `Documents\SelfChat Backups`; Delete permanently = hide only (text stays in the log); backups at start + hourly if changed; retention newest per day for 30 days + newest 5 today; version 3.0.0.
+- The interface was ported, not rewritten. Storage-related text changed: data status panel (data folder, integrity, message count, last backup), "Saved on this PC", Settings copy, backup-folder dialog (path entry replaces the browser folder picker), Delete-permanently wording, recovery-preview wording, error/loading screen replacing the single-tab screen. The pairing dialog and sync section were removed.
+- Sending: the text stays in the composer until the server acknowledges the save, then the message appears (previously optimistic).
 
 ## Delivery state
 
-- **Implemented:** v2.10.0 SC-20 permanent-erasure propagation foundation exists in the current working tree.
-- **Tested:** yes. All required syntax checks, 88 automated tests, `git diff --check`, and the local browser parity/persistence/error pass described below passed on 2026-11-18.
-- **Committed:** yes. Implementation commit `0324caccd56cc59f0b84094a21a8e4e393b54d18` contains the v2.10.0 source, tests, decisions, backlog, and initial handoff report.
-- **Pushed:** yes. `origin/main` was verified at full commit `0324caccd56cc59f0b84094a21a8e4e393b54d18`.
-- **Deployed:** no. Production still serves v2.9.0. The deployment command was not run because the approval reviewer requires separate explicit user approval for this security/privacy-boundary release.
-- **Production verified:** no for v2.10.0; pending explicit deployment approval and deployment.
+- **Implemented:** yes, on `storage-rebuild`.
+- **Tested:** yes, `npm test` (unit, integration, crash, import, backup, Playwright end-to-end) and the `node --check` list in `AGENTS.md`, on 2026-11-24. See `BUILT.md` and the final report for counts.
+- **Committed / Pushed:** see git; the branch is pushed to `origin/storage-rebuild`. Not merged to `main`.
+- **Deployed:** no, and not deployable to Vercel as-is: the app needs the local server.
 
-## SC-20 permanent-erasure propagation — 2026-11-18
+## Not yet done / next steps
 
-- **Content-free markers:** permanent deletion retains a minimal marker containing only a stable entity ID, entity type, and erasure time. Message text, chat names, filenames, MIME types, and attachment bytes are excluded. Related message and attachment IDs discovered during purge receive markers too.
-- **Authenticated transfer:** Data settings can explicitly create a signed AES-256-GCM erasure update. The outer envelope authenticates profile, key epoch, signer, independent sequence, creation time, and marker count without exposing stable IDs. Receipt requires a currently authorized unblocked device and rejects wrong profile/epoch, tampering, malformed marker fields, and stale/replayed sequences.
-- **Erasure scope and durability:** application removes matching live records, Trash payloads, drafts, daily snapshots, attachment blobs, legacy migration copies, and immutable operation history while retaining the minimal marker in existing metadata. Marker and replay cursor commit with the primary purge before legacy cleanup.
-- **Resurrection prevention:** retained markers filter older operation envelopes and attachment packages, local commits, backup imports, point-in-time recovery, reload, and state replacement. Erasure updates are idempotent and use a replay cursor independent from ordinary encrypted updates.
-- **Manual boundary:** erasure packages still move only by explicit copy/paste. Automatic transport, endpoint configuration, accounts, and cloud persistence remain disabled.
-- **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 88 automated tests and `git diff --check` passed. The local browser loaded v2.10.0 with its existing 2 messages and attachments, showed the erasure-update control and the correct no-marker state, closed the pairing dialog with Escape, retained data through reload, and showed no application console errors. Chrome emitted only its expected custom-install-prompt diagnostic.
-- **GitHub delivery:** implementation commit `0324caccd56cc59f0b84094a21a8e4e393b54d18` was pushed and verified on `origin/main`. Production deployment is intentionally pending separate explicit approval because this release changes the security/privacy boundary.
-- **Remaining risks:** operation and marker histories are unbounded; transport is manual; offline/reconnect behavior is not integration-tested; backend retention/access policy is unresolved. Stable IDs remain intentionally retained as content-free anti-resurrection markers until a future bounded-retention rule exists.
-- **Next recommended step:** implement bounded operation and erasure-marker compaction/retention, then offline/reconnect integration tests before selecting a backend.
+1. Owner imports the real backup (`node import-backup.js "<backup.json>"`) and confirms `RESULT: MATCH`. Optionally first with `--data` into a trial folder.
+2. Owner switches: merge `storage-rebuild` into `main`. Decide then whether to retire the hosted site (needs explicit approval; changing Vercel settings is not covered by standing authorization).
+3. The old browser data in IndexedDB at `http://127.0.0.1:47832` is not read or changed by v3.0.0; it stays as a fallback until the owner decides otherwise.
 
-## SC-20 profile-key rotation and durable revocation — 2026-11-18
+## Known limits
 
-- **Forward revocation:** revoking a device advances a monotonic profile-key epoch and generates a new random AES-256 key. The signed rotation package wraps that key separately for each retained authorized device with ephemeral ECDH, HKDF-SHA-256, and AES-GCM; revoked and previously blocked devices receive no grant.
-- **Authenticated registry:** receivers require a currently authorized unblocked signer, a consecutive epoch, coverage of every known active device, unchanged known signing and agreement identities, and a grant targeting the current device. A trusted signer may introduce newly enrolled devices that a peer has not yet seen; omitted known devices, identity substitution, stale or skipped epochs, and revoked recipients are rejected. Legacy peers that lack an authorizer agreement key learn it only from that authorizer's signed rotation package.
-- **Epoch enforcement:** operation envelopes and attachment bundles authenticate the active key epoch, so packages made with an older key are rejected before decryption. Enrollment grants carry the current epoch so devices paired after a rotation join the correct generation.
-- **Durability and UI:** the new key, epoch, rotation provenance, and revocation metadata persist without a database migration or content rewrite. Data settings shows the active epoch, replaces local-only blocking with `Revoke device`, and produces an explicit copy/paste rotation package for every remaining device. Automatic transport remains off.
-- **Adjacent reliability fix:** the service worker now clones cacheable responses before returning them to the page, preventing the previous `Response body is already used` console failures during deferred cache writes.
-- **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 85 automated tests and `git diff --check` passed. The local browser loaded v2.9.0 over the existing profile, retained 2 messages and their attachments through repeated reloads, displayed `key epoch 1` and the revised rotation guidance, closed the pairing panel through Escape, activated the fixed service worker, and produced no application errors. Chrome emitted only its expected custom-install-prompt banner diagnostic.
-- **Production delivery:** implementation commit `72c53c5681e5e52ce33fa2d74321ccf431857dbf` was pushed and verified on `origin/main`. Production deployment `dpl_DjemGgKqsX3DRTFbBbgy8jdZPG2w` reached READY and the stable URL served v2.9.0. Production load/reload preserved all 1,084 hosted-origin messages, showed persisted storage and key epoch 1, and produced no application errors; Chrome emitted only the expected custom-install-prompt banner diagnostic.
-- **Remaining risks:** rotation packages still require manual distribution; a retained device that misses one epoch cannot skip directly to a later package; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
-- **Next recommended step:** implement signed content-free permanent-erasure markers with idempotent cross-device application, then bounded operation compaction and offline/reconnect integration tests before selecting a backend.
-
-## SC-20 encrypted attachment packages — 2026-11-18
-
-- **Chunk encryption and privacy:** attachment bytes are split into 256 KiB chunks, each encrypted independently with AES-256-GCM and authenticated additional data binding the package manifest and exact index. Filenames and MIME types stay in the encrypted operation envelope rather than the outer manifest. A separately encrypted whole-file SHA-256 digest verifies reconstruction without exposing the fingerprint in package metadata.
-- **Authenticated transfer:** the sending device signs the manifest, sealed integrity record, and every ciphertext chunk. Import requires the same authorized, unblocked signer and sync profile as the operation envelope, plus an exact attachment-reference ID and size match.
-- **Atomic application:** all bundles are decrypted and verified before IndexedDB mutation. Winning attachment blobs then commit in the same transaction as fresh immutable operations, materialized records, Lamport-clock advancement, and replay-cursor advancement. Missing, extra, duplicate, reordered, truncated, tampered, wrong-profile, or wrong-signer data is rejected without partial state.
-- **Manual UI path:** the pairing panel distinguishes copyable text-only updates from a downloadable package containing attachments. Package download and import are explicit user actions; no endpoint, account, adapter, automatic transport, or background transfer is enabled.
-- **Checks actually run:** required syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 83 tests and `git diff --check` passed. The local browser loaded v2.8.0 over the existing profile, retained 8 messages and 3 attachments, displayed both package controls, downloaded a package with 3 encrypted attachments, re-imported it without duplicating operations, closed through Escape, retained all data after reload, and logged no warnings or errors.
-- **Production delivery:** implementation commit `2201948a517c98ecdceded5039b3b49ab279390b` was pushed and verified on `origin/main`. Production deployment `dpl_DBfbxp6KGUERY4iXh2zRd52y7Zr1` reached READY and the stable URL served v2.8.0. Production load/reload preserved its one hosted-origin message and produced no warnings or errors.
-- **Remaining risks:** manual packages still contain complete local-device operation history; blocking still lacks profile-key rotation; permanent erasure does not propagate; operation history is unbounded; backend retention/access policy and offline/reconnect automatic-transport tests remain unresolved.
-- **Next recommended step:** implement profile-key rotation with durable device revocation, followed by content-free permanent-erasure markers, compaction, and offline/reconnect integration coverage before backend selection.
-
-## SC-20 pairing and remote application — 2026-11-18
-
-- **Direct pairing ceremony:** Data settings opens a dedicated pairing panel. An existing device creates a signed ten-minute invitation; a joining device creates a signed request; the existing device issues the encrypted grant; and both surfaces display the same comparison code. Device labels and pending pairing state persist locally.
-- **Authorized-device lifecycle:** the panel lists trusted devices and can block another device locally. The current device cannot block itself. The UI explicitly warns that local blocking does not rotate the shared profile key or provide complete cryptographic revocation.
-- **Manual encrypted updates:** a paired device can generate a signed AES-GCM envelope containing only its local operation history and copy it directly to another device. This is an explicit test path, not automatic transport.
-- **Transactional remote application:** receipt verifies the profile ID, unblocked authorized signer, signature, AES-GCM authentication, monotonic sequence, immutable operation IDs, signer/counter identity, supported store/action, entity/value consistency, and device-local metadata exclusion. Fresh operations, materialized conflict winners, the Lamport clock, and the replay cursor commit atomically. Duplicate immutable operations are idempotent; changed duplicates and replayed envelopes are rejected.
-- **Deletion behavior:** normal winning delete operations remove their materialized record transactionally. Permanent erasure remains local until encrypted content-free tombstones and key rotation are designed.
-- **Checks actually run:** syntax checks for the changed sync/storage/application files and all 78 automated tests passed. A local browser loaded v2.7.0 over the existing profile, retained all 8 messages and 3 attachments, created an invitation with a verification code, copied generated text, created an encrypted update, rejected malformed pasted text, closed through both Escape and Done, retained data after reload, and logged no warnings or errors.
-- **Remaining risks:** blocking lacks key rotation; pairing text has no QR representation; operation envelopes currently send the complete local device history; attachment bytes do not transfer; permanent erasure does not propagate; compaction and backend retention/access policy are unresolved.
-- **Next recommended step:** implement attachment chunk encryption/integrity, profile-key rotation and revocation, content-free permanent-erasure markers, bounded operation compaction, and full offline/reconnect integration tests before selecting or enabling a backend.
-
-## SC-20 security foundation — 2026-11-18
-
-- **Persistent security identity:** startup creates one profile ID and random 256-bit sync key plus one P-256 ECDSA signing pair and P-256 ECDH agreement pair for the existing local device. Reopening preserves these values. Existing chats, messages, attachments, Trash, snapshots, and operation history are not rewritten.
-- **Authenticated enrollment:** requesters sign profile-bound enrollment requests to prove possession. Trusted devices verify the request, use ephemeral ECDH and HKDF-SHA-256 to derive an AES-GCM wrapping key, encrypt the profile key, and sign a ten-minute grant. Acceptance requires the independently trusted authorizer public key and rejects wrong-device, mismatched-request, tampered, or expired grants.
-- **Encrypted operation envelopes:** operation batches use AES-256-GCM, authenticated headers, and per-device ECDSA signatures. Tests confirm plaintext is absent from envelopes and that signature tampering, wrong content, and stale sequence replays are rejected.
-- **Backend boundary:** `sync-backend.js` defines and validates encrypted-envelope and encrypted-attachment-chunk adapter methods. The default adapter rejects every transport call; persisted transport state is `{ configured: false, enabled: false }`.
-- **Browser surface:** Data settings reports `Encrypted sync identity ready · transport off`, making the privacy boundary explicit without adding setup friction to the capture loop.
-- **Checks actually run:** syntax checks passed for `app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, `service-worker.js`, `sync-crypto.js`, and `sync-backend.js`; all 74 automated tests passed. A local browser loaded v2.6.0 over the existing profile, retained all 8 messages and 3 attachments after reload, showed the encrypted-identity/transport-off diagnostic, and logged no warnings or errors.
-- **Remaining risks:** enrollment has no user-facing pairing/verification ceremony yet; remote authorization state and replay cursors are not applied transactionally; cross-device permanent deletion needs explicit encrypted tombstone semantics; attachment encryption/chunk integrity and operation compaction remain unimplemented; no backend retention or access policy has been selected.
-- **Next recommended step:** implement the pairing and authorized-device lifecycle plus transactionally validated remote-envelope application before selecting or enabling any backend. Keep transport disabled until reconnect, replay, conflict, deletion, and attachment-integrity integration tests pass.
-
-## SC-20 local foundation — 2026-11-18
-
-- **Storage upgrade:** `selfchat-unified-v1` advances from schema version 1 to 2 by adding an indexed `operations` store. The upgrade leaves all existing chats, messages, drafts, Trash, snapshots, stickers, attachments, and metadata in place.
-- **Identity and bootstrap:** first open creates one random browser-profile/origin device ID and a logical counter. Existing local entities receive per-entity bootstrap operations; reopening is idempotent and does not regenerate identity or duplicate history.
-- **Atomic tracking:** ordinary local puts/deletes and their operation records share one IndexedDB transaction. Operations cover chats, messages, stickers, drafts, Trash, attachment references, and All Messages visibility. Attachment operations omit blob bytes. Concurrent local commits are serialized so IDs and counters remain unique.
-- **Ordering and conflict rule:** operation IDs are device ID plus counter. Operations deduplicate by ID and sort by Lamport counter, binary device ID, then operation ID. The greatest operation for a store/entity key wins deterministically, including delete-versus-update conflicts.
-- **Data lifecycle:** point-in-time state replacement emits operations; explicit permanent erasure removes matching operation history as well as existing local and legacy copies.
-- **Privacy boundary:** no network call, cloud storage, account, authentication, encryption, remote ingest, or attachment transfer was added.
-- **Checks:** `node --check app.js`, `app-core.js`, `server.js`, `storage.js`, `storage-core.js`, and `service-worker.js`; all 68 automated tests; and `git diff --check` passed. Browser verification at `http://127.0.0.1:47832` loaded v2.5.0 over the existing local profile, preserved all 8 visible messages and the persisted-storage status after reload, and showed no console warnings or errors. The pass made no user-data changes.
-- **Remaining risks:** the deterministic last-writer rule is defined but remote validation/application is not implemented; unbounded operation retention and future compaction are unresolved; attachment bytes need encrypted chunk transfer and integrity checks; cross-device permanent-deletion propagation needs an encrypted tombstone design that does not conflict with local permanent-erasure guarantees.
-- **Next recommended step:** design and implement encrypted operation envelopes, authenticated device enrollment, and a minimal backend boundary before adding any transport. Keep remote application disabled until envelope validation, replay protection, deletion semantics, and attachment integrity tests pass.
-
-## Automatic deployment policy — 2026-11-18
-
-- Explicitly authorized SelfChat development tasks now carry standing authorization through implementation, required automated and browser verification, fixes, continuity updates, commit, push, deployment to the existing SelfChat Vercel production project, and production verification.
-- Automatic deployment is allowed only after all required tests pass, existing functionality and user data are preserved, no unresolved critical defects remain, and the release stays within the approved scope and existing production target.
-- Separate approval remains required for destructive or irreversible work; potentially erasing, corrupting, or incompatible data migrations; authentication, encryption, security, or privacy-boundary changes; cloud sync or transmission of existing messages; new infrastructure, credentials, paid services, unexpected costs, material architecture changes, and out-of-scope work.
-- Every persistent handoff must distinguish **Implemented**, **Tested**, **Committed**, **Pushed**, **Deployed**, and **Production verified**. A failed deployment must be reported while preserving the last working production version.
-- This policy supersedes the prior requirement for separate approval of each production deployment and does not authorize unrequested features.
-- **Implemented:** `AGENTS.md`, `DECISIONS.md`, and this handoff now contain the permanent automatic-deployment authorization and safeguards; `FEATURE_BACKLOG.md` records the SC-20 deployment state.
-- **Tested:** all required syntax checks, all 68 automated tests, `git diff --check`, local browser reload/persistence/error verification, authenticated production fetch, and production browser load/reload/error verification passed on 2026-11-18.
-- **Committed:** yes. Policy commit `6f2e87b` records the standing authorization; the subsequent delivery-report commit records the deployment result.
-- **Pushed:** yes. The policy commit was verified on `origin/main`; verify the delivery-report commit at handoff.
-- **Deployed:** yes. The qualifying v2.5.0 SC-20 local foundation was deployed as `dpl_zGxZEzmutQ3sCdwLrmqyUAJmh4C9`.
-- **Production verified:** yes. The stable production URL serves v2.5.0 and passed the production checks above.
-
-## Prior continuity update — 2026-11-18
-
-- **Low-interruption development policy:** an explicitly authorized development task carries standing authorization for autonomous implementation, testing, debugging, documentation, and routine commit/push synchronization to the existing SelfChat GitHub repository. Its separate-deployment-approval rule is superseded by the automatic deployment policy above for qualifying releases. Codex permission and sandbox restrictions remain binding.
-- **Repository synchronization:** the durable `AGENTS.md` rules now explicitly require milestone backlog updates, implementation-result and next-step handoffs, architectural decision records, approved report-inclusive commits and pushes, successful-push verification before claiming GitHub synchronization, and a strict separation between Git pushes and production deployments.
-- **Implemented:** repository guidance now makes `FEATURE_BACKLOG.md` and this handoff the durable cross-session records for development status and implementation continuity. `AGENTS.md`, `README.md`, and `DECISIONS.md` describe the same hierarchy and approval boundaries.
-- **Tested:** `git diff --check`, all repository-required syntax checks, all 59 automated tests, and the v2.4.0 browser parity pass passed.
-- **Committed:** yes; release commit `4b373c1`.
-- **Pushed:** yes; `origin/main` includes `4b373c1`.
-- **Deployed:** yes; production deployment `dpl_3Xtdmro7xeuhpeFp2L5f3fFT5bSu` is READY at the stable URL.
-- **Blockers:** none for the continuity workflow.
-- **Next step:** use these records in every future implementation; automatically commit, push, deploy, and production-verify completed qualifying work within an explicitly authorized task, while obtaining explicit approval for the listed safeguard exceptions.
-
-## Architecture and privacy boundary
-
-- `selfchat-unified-v1` remains the only active data source. Source v2.10.0 retains IndexedDB schema version 2 and adds no migration or destructive rewrite.
-- Device ID, profile key, and private device credentials remain browser-local metadata, not an account. Lamport order is deterministic but does not claim wall-clock chronology.
-- Operation payloads remain local plaintext inside the existing browser privacy boundary and can be transformed into signed encrypted envelopes for future transport. Attachment operations contain references and metadata, while blob bytes stay in `attachments`.
-- The installed app uses the same browser profile and origin data. It does not copy, upload, or synchronize message content.
-- `service-worker-core.js` owns the small testable cache-policy decisions. `service-worker.js` owns browser service-worker lifecycle and fetching.
-- Failed responses and cross-origin responses are not added to the offline cache. Navigation failures fall back to the cached app shell.
-- Before network synchronization, add backend retention and access boundaries, bounded operation/marker compaction, and offline/reconnect integration coverage. Attachment integrity, profile-key rotation, and cross-device permanent-erasure semantics are implemented for explicit manual packages.
-
-## Verification baseline
-
-Run the complete repository-required checks after every code change:
-
-```powershell
-node --check app.js
-node --check app-core.js
-node --check server.js
-node --check storage.js
-node --check storage-core.js
-node --check service-worker.js
-node --check sync-crypto.js
-node --check sync-backend.js
-npm test
-```
-
-The 2026-11-18 v2.4.0 browser pass served `http://127.0.0.1:47832` and confirmed:
-
-- Data settings opens and closes through both its Done button and Escape.
-- The offline app shell reports ready while online.
-- Reload succeeds with the local server stopped, with all 8 existing messages and 3 attachments still available from browser-local storage/cache.
-- Reload succeeds again after the local server restarts.
-- No browser console warnings or errors were present.
-
-The user explicitly approved commit, push, and production deployment for v2.4.0 on 2026-11-18. Future explicitly authorized development tasks carry standing authorization for routine commits, pushes, qualifying production deployments to the existing SelfChat Vercel project, and production verification.
-
-## Current blockers and next steps
-
-- No blocker is recorded for maintaining project context.
-- v2.4.0 release history remains complete and is superseded in production by v2.5.0.
-- v2.5.0 implementation, verification, commit, push, deployment, and production verification are complete.
-- v2.6.0 security-foundation implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- v2.7.0 pairing/remote-application implementation, verification, implementation commit/push, deployment, and production verification are complete.
-- v2.8.0 encrypted attachment-package implementation, verification, commit/push, deployment, and production verification are complete.
-- v2.9.0 key-rotation/revocation implementation, verification, commit/push, deployment, and production verification are complete.
-- v2.10.0 permanent-erasure propagation is implemented, locally verified, committed, and pushed. Deployment and production verification require separate explicit approval for this security/privacy-boundary release.
-- Continue SC-20 with bounded compaction/retention and integration tests; do not enable transport before those safeguards exist.
+- Power-loss durability relies on `fsync` (Windows `FlushFileBuffers`); process kills are tested automatically, power cuts cannot be.
+- Recovery points and startup replay read the whole log; fine for years of personal use, but a snapshot could be added later if startup gets slow (the spec allows one, rebuildable from the log).
+- `npm test` needs Playwright's Chromium (`npx playwright install chromium` on a new machine).

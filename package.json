@@ -1,13 +1,13 @@
 {
   "name": "selfchat",
-  "version": "2.10.0",
-  "description": "SelfChat is a private, desktop-first message stream organized into multiple chats containing only you.",
-  "main": "app.js",
+  "version": "3.0.0",
+  "description": "SelfChat is a private, desktop-first message stream organized into multiple chats containing only you. A local server saves everything to disk.",
+  "main": "server.js",
   "directories": {
     "test": "tests"
   },
   "scripts": {
-    "test": "node --test tests/*.test.js",
+    "test": "node --test --test-timeout=120000 tests/*.test.js",
     "start": "node server.js"
   },
   "keywords": [],
@@ -16,6 +16,6 @@
   "private": true,
   "type": "commonjs",
   "devDependencies": {
-    "fake-indexeddb": "^6.2.8"
+    "playwright": "^1.65.1"
   }
 }

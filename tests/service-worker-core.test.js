@@ -26,6 +26,14 @@ test("offline cache accepts only successful same-origin GET responses", () => {
   ), false);
 });
 
+test("data requests are never served from or stored in the offline cache", () => {
+  const origin = "http://127.0.0.1:47832";
+  assert.equal(core.isAppShellRequest({ method: "GET", url: `${origin}/api/state` }, origin), false);
+  assert.equal(core.shouldCacheResponse({ method: "GET", url: `${origin}/api/state` }, { ok: true }, origin), false);
+  assert.equal(core.shouldCacheResponse({ method: "GET", url: `${origin}/api/attachments/a1` }, { ok: true }, origin), false);
+  assert.equal(core.isAppShellRequest({ method: "GET", url: `${origin}/app.js` }, origin), true);
+});
+
 test("offline navigation falls back to the cached app shell", () => {
   const navigation = { mode: "navigate", url: "https://selfchat.example/chat" };
   const asset = { mode: "cors", url: "https://selfchat.example/app.js" };

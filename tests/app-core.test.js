@@ -11,7 +11,8 @@ function deferred() {
 
 function sendHarness() {
   let input = "hello";
-  const messages = [];
+  const shown = [];
+  const failures = [];
   const save = deferred();
   const send = core.createTextSendController({
     getInput: () => input,
@@ -19,22 +20,42 @@ function sendHarness() {
     getChatId: () => "topic",
     createId: () => "message-1",
     now: () => "2026-11-13T12:00:00.000Z",
-    addOptimistic: message => messages.push(message),
     persist: () => save.promise,
-    rollback: message => messages.splice(messages.findIndex(item => item.id === message.id), 1)
+    onSaved: message => shown.push(message),
+    onFailure: error => failures.push(error)
   });
-  return { send, save, messages, getInput: () => input, setInput: value => { input = value; } };
+  return { send, save, shown, failures, getInput: () => input, setInput: value => { input = value; } };
 }
 
-test("double Enter sends a cleared composer only once", async () => {
+test("the composer keeps the text and nothing is shown until the server saves it", async () => {
+  const harness = sendHarness();
+  const sending = harness.send();
+  assert.equal(harness.getInput(), "hello");
+  assert.equal(harness.shown.length, 0);
+  harness.save.resolve();
+  assert.equal(await sending, true);
+  assert.equal(harness.getInput(), "");
+  assert.equal(harness.shown.length, 1);
+});
+
+test("double Enter while saving sends only once", async () => {
   const harness = sendHarness();
   const first = harness.send();
   const second = await harness.send();
-  assert.equal(harness.getInput(), "");
-  assert.equal(harness.messages.length, 1);
   assert.equal(second, false);
   harness.save.resolve();
   assert.equal(await first, true);
+  assert.equal(harness.shown.length, 1);
+});
+
+test("a failed save leaves the text in the composer and shows nothing", async () => {
+  const harness = sendHarness();
+  const sending = harness.send();
+  harness.save.reject(new Error("server unreachable"));
+  assert.equal(await sending, false);
+  assert.equal(harness.getInput(), "hello");
+  assert.equal(harness.shown.length, 0);
+  assert.equal(harness.failures.length, 1);
 });
 
 test("text typed during a slow save survives completion", async () => {
@@ -44,6 +65,15 @@ test("text typed during a slow save survives completion", async () => {
   harness.save.resolve();
   assert.equal(await sending, true);
   assert.equal(harness.getInput(), "typed while saving");
+});
+
+test("text appended during a slow save stays after the sent part is removed", async () => {
+  const harness = sendHarness();
+  const sending = harness.send();
+  harness.setInput("hello\nmore");
+  harness.save.resolve();
+  assert.equal(await sending, true);
+  assert.equal(harness.getInput(), "more");
 });
 
 test("pinned chats stay above unpinned chats while each group follows latest activity", () => {

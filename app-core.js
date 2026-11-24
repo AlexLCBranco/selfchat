@@ -3,13 +3,17 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.SelfChatAppCore = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  // The text stays in the composer until the server has saved the message to disk.
+  // Only then is the sent text removed from the composer and the message shown.
   function createTextSendController(options) {
+    let sending = false;
     return async function sendText() {
+      if (sending) return false;
       const raw = options.getInput();
       const text = raw.trim();
       if (!text) return false;
 
-      options.setInput("");
+      sending = true;
       const message = {
         id: options.createId(),
         chatId: options.getChatId(),
@@ -18,17 +22,18 @@
         editedAt: null,
         ...(options.getExtra?.() || {})
       };
-      options.addOptimistic(message);
       try {
-        await options.persist(message);
-        options.onSaved?.(message);
-        return true;
+        await options.persist(message, "");
       } catch (error) {
-        options.rollback(message);
-        if (!options.getInput()) options.setInput(raw);
         options.onFailure?.(error, message);
         return false;
+      } finally {
+        sending = false;
       }
+      const current = options.getInput();
+      options.setInput(current === raw ? "" : current.startsWith(raw) ? current.slice(raw.length).replace(/^\n+/, "") : current);
+      options.onSaved?.(message);
+      return true;
     };
   }
 
